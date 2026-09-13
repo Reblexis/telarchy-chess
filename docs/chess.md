@@ -209,6 +209,89 @@ carrying the decision's `kind`, the chosen option's `price` and `tied`.
 A new field does not raise `schema`; a field that changes meaning or
 leaves does.
 
+## The stream
+
+The game rendered as a 1280 by 720 frame in-process (`@napi-rs/canvas`, no
+browser) and pushed to Twitch at 5 frames a second through ffmpeg, from the
+chess server. The channel is https://www.twitch.tv/telarchy, the one the
+snake used (credentials and the stream key in the keyring,
+`telarchy/twitch.env`). A channel takes one stream, so while chess streams
+the snake's stream unit is stopped and its watchdog does not start it again
+(telarchy-snake `docs/snake.md`, "The stream").
+
+**The stream never dies of one bad read.** It polls `/state` once a second.
+A read that fails, or a payload that is not an object with a string
+`phase`, is not drawn: the last good frame stays on screen and the read is
+logged. A payload with `game: null` is a real state (no game yet) and is
+drawn. A frame that throws is skipped, not fatal. A stream that exits comes
+back after a restart delay.
+
+**The frame is the snake stream's dark frame with a chessboard in it**, so
+the two read as one channel. Ground `#101013`, text in Inter, Fraunces and
+JetBrains Mono, pieces in Noto Sans Symbols 2, every face and the Telarchy
+lockup bundled in the repo (`fonts/` with their OFL licences, `assets/`);
+the frame reads nothing from the system or the network. Every line is
+readable at 720p and no text runs past the frame or out of its column.
+
+**The board** fills the frame's height on the left (x 24, y 24, 84 px
+squares), seen from TelarchyBot's side: white at the bottom when
+`game.color` is white, black otherwise. a1 is a dark square. The squares
+use the floor's tones (light `#efe8d6`, dark `#d6ccb2`; the two squares of
+the last move in `game.moves` tinted `#e6d28a` light, `#d2bb6a` dark), file
+letters in the bottom row's corners and rank numbers in the left column's,
+mono, `#6b6b7a`. The pieces are the position in `game.fen`, white filled
+`#fbf9f4` outlined `#17171c`, black filled `#17171c`. With no game the start
+position is drawn.
+
+**The top three moves are arrows on the board** while `phase` is
+`our-move`: the three highest-priced options (ties in proposal order),
+drawn from square centre to square centre in the accent `#f59e0b`, shaded
+as the floor shades them (the highest price at 0.9, the lowest of the three
+at 0.3, all at 0.55 when fewer than two are priced or all tie), each with a
+small dark tag on its target square carrying its price to one decimal. An
+unpriced option draws no arrow. A move is the **leader** only when its price
+is strictly the highest; its tag is green (`#4ade80`). With a tie at the top
+nothing is green, because the tie is broken at random.
+
+**The right column** (from x 736, 520 px wide), top to bottom:
+
+1. the Telarchy lockup, 18 px tall at its own aspect ratio;
+2. "Chess" in Fraunces 700 and the question "What will I score in this
+   game?" in Fraunces 500, muted;
+3. three cells between hairlines, each a small mono uppercase label over a
+   large mono value: the player's name and rating over its clock, the
+   opponent's name and rating over theirs (a name too long for its cell is
+   cut with an ellipsis), and the state of the move:
+   - `our-move`: `NEXT MOVE` over the countdown to `open.decideAt` in the
+     accent, "deciding" once it has run out;
+   - `their-move`: `THEIR MOVE` over "thinking", muted;
+   - `settling`, or a game with a `result`: `GAME OVER` over "won" in
+     green, "lost" in red (`#f87171`) or "drawn";
+   - `seeking` with no result to show: `NEXT GAME` over "seeking", muted.
+
+   Clocks read `m:ss`, `h:mm:ss` from an hour, never below `0:00`. The
+   clock of the side to move counts down by the second from the moment the
+   feed's clocks were last true: `open.openedAt` for TelarchyBot's clock
+   while a move is open, the newest `recentDecisions` entry of this game for
+   the opponent's while they think. Without that moment (the opponent's
+   first move before we have moved) and once the game has ended, both clocks
+   stand still;
+4. the player's record, one muted mono line: `RATING 1415? · PLAYED 10 ·
+   WON 0 · LOST 10 · DRAWN 0` (`?` while provisional), absent while
+   `player` is null;
+5. one panel of up to five rows between hairlines:
+   - while a move is open, **Top moves** with the number of legal moves at
+     the right: each option's SAN and price, highest first (ties in
+     proposal order, unpriced last), the leader's row green, and "+N more"
+     under the last row when more options exist;
+   - otherwise **Game N**: the game's moves as numbered pairs in SAN
+     (`12.  Nf3  d5`), newest first;
+6. at the foot the link alone: `telarchy.com/chess` in a bone (`#f2ecdc`)
+   pill, Inter 600. No other words invite the viewer anywhere.
+
+With no game yet the column's cells read `-` and the panel says "Waiting
+for the first game".
+
 ## Operation
 
 One Node process: the Lichess event stream, the game stream, the operator,
