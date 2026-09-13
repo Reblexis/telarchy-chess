@@ -85,8 +85,11 @@ One metric, **Game score**: TelarchyBot's result in the current game from
 its own side, **100 for a win, 50 for a draw, 0 for a loss** (an aborted
 game has no result and settles nothing). Range 0 to 100.
 
-**One book per game.** When a game starts, the operator sets the metric's
-only horizon to the absolute one-minute cell 24 hours after the game's
+**One book per game.** When a game starts, the operator first posts a
+reading of 50 (no result yet), so the game's main book, and every option
+book anchored to it, opens at the middle and never at the last game's
+result. Then it sets the metric's only horizon to the absolute one-minute
+cell 24 hours after the game's
 start (`customHorizons: ["YYYY-MM-DDTHH:MM"]`) and forces the workspace's
 market refresh, which opens that cell's main book. Every proposal of the
 game is priced on that cell.
