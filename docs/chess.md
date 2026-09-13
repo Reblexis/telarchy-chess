@@ -173,8 +173,12 @@ listed is present; a value not known yet is `null`.
 - `phase`: `our-move` (a proposal is open), `their-move`, `settling` (the
   game is over and its settlement has not gone through), `seeking` (idle,
   looking for a game).
-- `player`: `{ username, url, rating: { classical, rapid, blitz },
-  provisional }` as Lichess last reported it (read at most once a minute).
+- `player`: `{ username, url, rating, provisional, games: { played, won,
+  lost, drawn } }` as Lichess last reported the account: `rating` the
+  classical rating, `provisional` Lichess's own flag, `games` its counts of
+  all, won, lost and drawn games. Read once a minute and again right after a
+  game ends, so the record moves with the result; `null` until the first
+  read.
 - `game`: the current or last game, `{ number, id, url, color, opponent: {
   name, title, rating }, rated, clock: { initial, increment }, fen, moves
   (UCI, oldest first), turn, clocks: { white, black } (milliseconds),

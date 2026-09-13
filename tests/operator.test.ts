@@ -53,7 +53,10 @@ function fakes(opts: {
     async cancelChallenge(id) { calls.push({ name: 'cancel', args: [id] }); },
     async claimVictory(gameId) { calls.push({ name: 'claimVictory', args: [gameId] }); },
     async onlineBots() { calls.push({ name: 'onlineBots', args: [] }); return (opts.bots ?? []) as never; },
-    async account() { return { username: ME, rating: 1500, provisional: true }; },
+    async account() {
+      calls.push({ name: 'account', args: [] });
+      return { username: ME, url: 'https://lichess.org/@/TelarchyBot', rating: 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 } };
+    },
   };
   const names = () => calls.map(c => c.name);
   const of = (name: string) => calls.filter(c => c.name === name);
@@ -503,5 +506,41 @@ describe('an opponent who leaves', () => {
     await op.onGameFull(full('black'), T0);
     await op.onOpponentGone({ gone: false }, at(10));
     expect(f.of('claimVictory')).toHaveLength(0);
+  });
+});
+
+describe("the player's record", () => {
+  it('is read once a minute and published on /state', async () => {
+    const f = fakes();
+    const op = operator(f, seq(0), false);
+    expect(op.publicState(T0).player).toBeNull();
+    await op.tick(T0);
+    expect(f.of('account')).toHaveLength(1);
+    expect(op.publicState(at(1)).player).toEqual({
+      username: ME, url: 'https://lichess.org/@/TelarchyBot', rating: 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 },
+    });
+    await op.tick(at(30));
+    expect(f.of('account')).toHaveLength(1);
+    await op.tick(at(61));
+    expect(f.of('account')).toHaveLength(2);
+  });
+
+  it('is read again right after a game ends, so the record moves with the result', async () => {
+    const f = fakes();
+    const op = operator(f, seq(0), false);
+    await op.tick(T0);
+    await op.onGameFull(full('black'), at(5));
+    await op.onGameState(st('e2e4', { status: 'resign', winner: 'white' }), at(20));
+    await op.tick(at(21));
+    expect(f.of('account')).toHaveLength(2);
+  });
+
+  it('a failed read keeps the last record', async () => {
+    const f = fakes();
+    const op = operator(f, seq(0), false);
+    await op.tick(T0);
+    (f.lichess as { account: () => Promise<unknown> }).account = async () => { throw new Error('lichess 429'); };
+    await op.tick(at(61));
+    expect(op.publicState(at(62)).player?.games.played).toBe(6);
   });
 });
