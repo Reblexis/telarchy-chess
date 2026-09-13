@@ -51,6 +51,7 @@ function fakes(opts: {
     async declineChallenge(id, reason) { calls.push({ name: 'decline', args: [id, reason] }); },
     async challenge(username, tc) { calls.push({ name: 'challenge', args: [username, tc] }); return { id: `ch-${username}` }; },
     async cancelChallenge(id) { calls.push({ name: 'cancel', args: [id] }); },
+    async claimVictory(gameId) { calls.push({ name: 'claimVictory', args: [gameId] }); },
     async onlineBots() { calls.push({ name: 'onlineBots', args: [] }); return (opts.bots ?? []) as never; },
     async account() { return { username: ME, rating: 1500, provisional: true }; },
   };
@@ -428,5 +429,51 @@ describe('the feed', () => {
     }
     expect(op.recentDecisions).toHaveLength(20);
     expect(op.recentDecisions[0].move).toBeGreaterThan(op.recentDecisions[1].move);
+  });
+});
+
+describe('the record of a game', () => {
+  it('history lists every ply with who played it, in UCI and SAN, and lays our decisions on our plies', async () => {
+    const f = fakes({ prices: () => ({ d2d4: { price: 58, lead: 3, marketId: 'm' } }) });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(18));
+    await op.onGameState(st('d2d4'), at(19));
+    await op.onGameState(st('d2d4 g8f6'), at(30));
+    const h = op.history('current')!;
+    expect(h.game).toMatchObject({ number: 1, id: 'g1' });
+    expect(h.plies).toEqual([
+      { ply: 1, at: at(19).toISOString(), by: 'us', uci: 'd2d4', san: 'd4', fen: fenAfter(['d2d4']), kind: 'market', price: 58, tied: 1 },
+      { ply: 2, at: at(30).toISOString(), by: 'them', uci: 'g8f6', san: 'Nf6', fen: fenAfter(['d2d4', 'g8f6']) },
+    ]);
+    expect(op.history(1)).toEqual(h);
+    expect(op.history(2)).toBeNull();
+  });
+  it('a restart keeps the record', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.onGameFull(full('black'), T0);
+    await op.onGameState(st('e2e4'), at(3));
+    const back = Operator.fromJSON(f.telarchy, f.lichess, seq(0), { username: ME, seek: true, workspaceId: 'ws-chess' }, JSON.parse(JSON.stringify(op.toJSON())));
+    expect(back.history('current')!.plies).toHaveLength(1);
+  });
+});
+
+describe('an opponent who leaves', () => {
+  it('the win is claimed once Lichess says it may be', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.onGameFull(full('black'), T0);
+    await op.onOpponentGone({ gone: true, claimWinInSeconds: 12 }, at(10));
+    expect(f.of('claimVictory')).toHaveLength(0);
+    await op.onOpponentGone({ gone: true, claimWinInSeconds: 0 }, at(22));
+    expect(f.of('claimVictory')).toEqual([{ name: 'claimVictory', args: ['g1'] }]);
+  });
+  it('an opponent who comes back is not claimed against', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.onGameFull(full('black'), T0);
+    await op.onOpponentGone({ gone: false }, at(10));
+    expect(f.of('claimVictory')).toHaveLength(0);
   });
 });
