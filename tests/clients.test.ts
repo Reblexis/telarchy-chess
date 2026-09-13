@@ -115,7 +115,7 @@ describe('the Telarchy client', () => {
     await c.postReading(100, new Date('2026-09-13T15:00:00Z'));
     await c.settleMetric(100, new Date('2026-09-13T15:00:00Z'), 'Game 1 vs X: win');
     const put = reqs.find(r => r.method === 'PUT' && r.body?.includes('customHorizons'))!;
-    expect(JSON.parse(put.body!).timePreference).toEqual({ enabled: false, customHorizons: [CELL], horizonCredits: { [CELL]: { book: 3000, proposal: 100 } } });
+    expect(JSON.parse(put.body!).timePreference).toEqual({ enabled: false, customHorizons: [CELL], horizonCredits: { [CELL]: { book: 3000, proposal: 1000 } } });
     expect(JSON.parse(reqs.find(r => r.body?.includes('"value":100') && r.method === 'PUT')!.body!)).toMatchObject({ value: 100, asOf: '2026-09-13T15:00:00.000Z' });
     const settle = reqs.find(r => r.url.endsWith('/metrics/m1/settle'))!;
     expect(JSON.parse(settle.body!)).toEqual({ value: 100, asOf: '2026-09-13T15:00:00.000Z', reason: 'Game 1 vs X: win' });

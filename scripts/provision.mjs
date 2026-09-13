@@ -52,7 +52,7 @@ const metric = await call('POST', '/metrics', {
   value: 50,
   marketRangeMin: 0,
   marketRangeMax: 100,
-  timePreference: { enabled: false, customHorizons: [cell], horizonCredits: { [cell]: { book: 3000, proposal: 100 } } },
+  timePreference: { enabled: false, customHorizons: [cell], horizonCredits: { [cell]: { book: 3000, proposal: 1000 } } },
 }, wsId);
 
 console.error('# settings: one-minute decision window, public, muted, closed to outside proposals');
