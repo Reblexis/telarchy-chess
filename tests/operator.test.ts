@@ -103,6 +103,19 @@ describe('challenges', () => {
 });
 
 describe('a game opens its book', () => {
+  it('a new game posts a reading of 50 before setting its cell, so its books never open at the last result', async () => {
+    const f = fakes();
+    await operator(f).onGameFull(full('black'), T0);
+    expect(f.of('postReading')).toEqual([{ name: 'postReading', args: [50, T0.toISOString()] }]);
+    expect(f.names().indexOf('postReading')).toBeLessThan(f.names().indexOf('setHorizon'));
+  });
+  it('the same game reported again posts no reading', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.onGameFull(full('black'), T0);
+    await op.onGameFull(full('black'), at(30));
+    expect(f.of('postReading')).toHaveLength(1);
+  });
   it('the start sets the metric horizon to the cell 24 hours out and refreshes the books', async () => {
     const f = fakes();
     await operator(f).onGameFull(full('black'), T0);
@@ -256,7 +269,7 @@ describe('the end settles the game, before anything else starts', () => {
     const op = operator(f);
     await op.onGameFull(full('black'), T0);
     await op.onGameState(st('f2f3 e7e5 g2g4 d8h4', { status: 'mate', winner: 'black' }), at(90));
-    expect(f.of('postReading')).toEqual([{ name: 'postReading', args: [100, at(90).toISOString()] }]);
+    expect(f.of('postReading').at(-1)).toEqual({ name: 'postReading', args: [100, at(90).toISOString()] });
     expect(f.of('settleMetric')).toEqual([{ name: 'settleMetric', args: [100, at(90).toISOString(), 'Game 1 vs OppBot: win'] }]);
     expect(op.publicState(at(91)).phase).toBe('seeking');
   });
@@ -287,7 +300,7 @@ describe('the end settles the game, before anything else starts', () => {
     await op.onGameFull(full('black'), T0);
     await op.onGameState(st('', { status: 'aborted' }), at(40));
     expect(f.of('settleMetric')).toHaveLength(0);
-    expect(f.of('postReading')).toHaveLength(0);
+    expect(f.of('postReading').map(c => c.args[0])).toEqual([50]); // only the game's opening reading
   });
   it('a refused settlement blocks every new game and is retried each minute until it goes through', async () => {
     const f = fakes({ settleFailures: 2 });
