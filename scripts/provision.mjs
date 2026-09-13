@@ -1,27 +1,33 @@
 #!/usr/bin/env node
 // Provision the Chess workspace and its Game score metric on one Telarchy store
-// (docs/chess.md, "The workspace"), signed in as a browser account because the
-// beta store is admin-gated and refuses agent keys. Prints the env lines the
-// service needs. Stops if a workspace named Chess already exists for the account.
+// (docs/chess.md, "The workspace") as the operator, `chess-operator`, whose key
+// is who acts and so who owns the floor. On the admin-gated beta an admin
+// session rides along only to open the gate. Prints the env lines the service
+// needs.
 //
-//   BASE=https://telarchy.com/beta/api AUTH_URL=https://telarchy.com/api \
-//   EMAIL=... PASSWORD=... BRANCH=br-many-option-proposals node scripts/provision.mjs
+//   BASE=https://telarchy.com/beta/api KEY=<chess-operator key> \
+//   EMAIL=<admin> PASSWORD=... BRANCH=br-chess-live-feed \
+//   FEED_URL=https://chess.167-233-147-90.nip.io node scripts/provision.mjs
 
-const { BASE, AUTH_URL = 'https://telarchy.com/api', EMAIL, PASSWORD, BRANCH } = process.env;
-if (!BASE || !EMAIL || !PASSWORD) throw new Error('set BASE, EMAIL and PASSWORD');
+const { BASE, AUTH_URL = 'https://telarchy.com/api', KEY, EMAIL, PASSWORD, BRANCH, FEED_URL } = process.env;
+if (!BASE || !KEY) throw new Error('set BASE and KEY (the operator key)');
 
-const signIn = await fetch(`${AUTH_URL}/auth/sign-in/email`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json', Origin: new URL(AUTH_URL).origin },
-  body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
-});
-if (!signIn.ok) throw new Error(`sign-in -> ${signIn.status}`);
-const cookies = signIn.headers.getSetCookie().map(c => c.split(';')[0]);
+const cookies = [];
+if (EMAIL) {
+  const signIn = await fetch(`${AUTH_URL}/auth/sign-in/email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: new URL(AUTH_URL).origin },
+    body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
+  });
+  if (!signIn.ok) throw new Error(`sign-in -> ${signIn.status}`);
+  cookies.push(...signIn.headers.getSetCookie().map(c => c.split(';')[0]));
+}
 if (BRANCH) cookies.push(`telarchy_beta_branch=${BRANCH}`);
 const cookie = cookies.join('; ');
 
 async function call(method, path, body, workspaceId) {
-  const headers = { 'Content-Type': 'application/json', Cookie: cookie };
+  const headers = { 'Content-Type': 'application/json', 'X-Agent-Key': KEY };
+  if (cookie) headers.Cookie = cookie;
   if (workspaceId) headers['X-Workspace-Id'] = workspaceId;
   const res = await fetch(`${BASE}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await res.text();
@@ -56,6 +62,7 @@ await call('PUT', `/workspaces/${wsId}/settings`, {
   notificationsMuted: true,
   externalProposalsDisabled: true,
   description: 'A Lichess player whose every move is chosen by this market: on its turn every legal move is an option, and the one priced highest is played.',
+  ...(FEED_URL ? { liveFeed: { kind: 'chess', url: FEED_URL } } : {}),
 }, wsId);
 
 console.log(`TELARCHY_BASE_URL=${BASE}
