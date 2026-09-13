@@ -1,0 +1,15 @@
+# systemd --user unit for futarchy chess (docs/chess.md, "Operation").
+[Unit]
+Description=Futarchy chess operator (TelarchyBot on Lichess)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/src/telarchy-chess
+ExecStart=/usr/bin/node dist/main.js
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/logs/telarchy-chess.log
+StandardError=append:%h/logs/telarchy-chess.log
+
+[Install]
+WantedBy=default.target

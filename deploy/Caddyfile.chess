@@ -1,0 +1,5 @@
+# Appended to /etc/caddy/Caddyfile on the snake's server (docs/chess.md, "Operation").
+# chess.telarchy.com needs an A record at Namecheap (-> 167.233.147.90); the nip.io name works without one.
+chess.167-233-147-90.nip.io {
+	reverse_proxy 127.0.0.1:8803
+}
