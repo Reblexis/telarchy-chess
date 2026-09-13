@@ -44,9 +44,18 @@ export interface LichessClient {
   challenge(username: string, tc: { limit: number; increment: number; rated: boolean }): Promise<{ id: string }>;
   cancelChallenge(id: string): Promise<void>;
   onlineBots(): Promise<OnlineBot[]>;
-  account(): Promise<{ username: string; rating: number; provisional: boolean }>;
+  account(): Promise<PlayerRecord>;
   /** docs/chess.md "The player": the win against an opponent who left, once Lichess allows it. */
   claimVictory(gameId: string): Promise<void>;
+}
+
+/** docs/chess.md "The feed", `player`: the account as Lichess last reported it. */
+export interface PlayerRecord {
+  username: string;
+  url: string;
+  rating: number;
+  provisional: boolean;
+  games: { played: number; won: number; lost: number; drawn: number };
 }
 
 export interface OperatorOptions {
@@ -132,7 +141,9 @@ export class Operator {
   /** Every game's plies by game number (docs/chess.md, "The feed", /history). */
   plies: Record<number, Ply[]> = {};
   private claimAt: number | null = null;
-  player: { username: string; rating: number; provisional: boolean } | null = null;
+  player: PlayerRecord | null = null;
+  /** When the record was last read; 0 asks for a read on the next tick. */
+  private accountAt = 0;
   /** The ply at which a move was last sent, so a late report of the old position never reopens it. */
   private playedPly: { gameId: string; plies: number } | null = null;
   private lastPollAt = 0;
@@ -339,6 +350,7 @@ export class Operator {
         else if (t - this.lastPollAt >= POLL_EVERY_MS) await this.poll(now);
       }
       if (this.claimAt !== null && t >= this.claimAt) await this.claim();
+      if (t - this.accountAt >= 60_000) await this.readAccount(now);
       if (this.settlement && t >= this.settlement.nextTryAt) await this.trySettle(now);
       await this.seek(now);
     } finally {
@@ -397,6 +409,7 @@ export class Operator {
   private async finish(now: Date): Promise<void> {
     const g = this.game!;
     g.endedAt = now.toISOString();
+    this.accountAt = 0; // the record moves with the result: read it on the next tick
     g.result = scoreOf({ status: g.status, winner: g.winner }, g.color);
     this.syncSummary();
     if (this.open) {
@@ -454,6 +467,16 @@ export class Operator {
     } catch (e) {
       this.nextSeekAt = t + CHALLENGE_WAIT_MS;
       console.error(`seek: ${(e as Error).message}`);
+    }
+  }
+
+  /** docs/chess.md "The feed": once a minute and right after a game ends; a failed read keeps the last record. */
+  private async readAccount(now: Date): Promise<void> {
+    this.accountAt = now.getTime();
+    try {
+      this.player = await this.lichess.account();
+    } catch (e) {
+      console.error(`account: ${(e as Error).message}`);
     }
   }
 

@@ -1,6 +1,6 @@
 // The Lichess Bot API client (docs/chess.md, "The player"). Deliberately has
 // no draw, takeback, abort or resign method: the player never does any of those.
-import type { LichessClient } from './operator.js';
+import type { LichessClient, PlayerRecord } from './operator.js';
 import type { OnlineBot } from './rules.js';
 
 const BASE = 'https://lichess.org';
@@ -81,13 +81,18 @@ export class HttpLichessClient implements LichessClient {
     return out;
   }
 
-  async account(): Promise<{ username: string; rating: number; provisional: boolean }> {
+  /** docs/chess.md "The feed", `player`: the classical rating and Lichess's own game counts. */
+  async account(): Promise<PlayerRecord> {
     const j = await (await this.req('GET', '/api/account')).json();
     const c = j?.perfs?.classical;
+    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    const username = String(j?.username ?? '');
     return {
-      username: String(j?.username ?? ''),
+      username,
+      url: typeof j?.url === 'string' ? j.url : `${BASE}/@/${username}`,
       rating: typeof c?.rating === 'number' ? c.rating : 1500,
       provisional: typeof c?.rating === 'number' ? !!c.prov : true,
+      games: { played: n(j?.count?.all), won: n(j?.count?.win), lost: n(j?.count?.loss), drawn: n(j?.count?.draw) },
     };
   }
 
