@@ -45,6 +45,8 @@ export interface LichessClient {
   cancelChallenge(id: string): Promise<void>;
   onlineBots(): Promise<OnlineBot[]>;
   account(): Promise<{ username: string; rating: number; provisional: boolean }>;
+  /** docs/chess.md "The player": the win against an opponent who left, once Lichess allows it. */
+  claimVictory(gameId: string): Promise<void>;
 }
 
 export interface OperatorOptions {
@@ -88,6 +90,11 @@ interface OpenMove {
   quotes: Prices | null; quotesAt: string | null;
 }
 
+export interface Ply {
+  ply: number; at: string; by: 'us' | 'them'; uci: string; san: string; fen: string;
+  kind?: DecisionKind; price?: number | null; tied?: number;
+}
+
 interface Settlement { value: 100 | 50 | 0; reason: string; at: string; nextTryAt: number }
 
 const RULE =
@@ -122,6 +129,9 @@ export class Operator {
   recentDecisions: DecisionRecord[] = [];
   games: Array<Omit<GameRecord, 'moves' | 'clocks' | 'inc'> & { plies: number }> = [];
   settlement: Settlement | null = null;
+  /** Every game's plies by game number (docs/chess.md, "The feed", /history). */
+  plies: Record<number, Ply[]> = {};
+  private claimAt: number | null = null;
   player: { username: string; rating: number; provisional: boolean } | null = null;
   /** The ply at which a move was last sent, so a late report of the old position never reopens it. */
   private playedPly: { gameId: string; plies: number } | null = null;
@@ -204,6 +214,7 @@ export class Operator {
     g.inc = { white: s.winc, black: s.binc };
     g.status = s.status;
     g.winner = s.winner ?? null;
+    this.recordPlies(g, now);
     this.syncSummary();
     if (s.status !== 'started' && s.status !== 'created') return this.finish(now);
     const ourTurn = (g.moves.length % 2 === 0) === (g.color === 'white');
@@ -282,6 +293,36 @@ export class Operator {
     }
   }
 
+  private recordPlies(g: GameRecord, now: Date): void {
+    const list = (this.plies[g.number] ??= []);
+    for (let i = list.length; i < g.moves.length; i++) {
+      const uci = g.moves[i];
+      const before = g.moves.slice(0, i);
+      const by: 'us' | 'them' = (i % 2 === 0) === (g.color === 'white') ? 'us' : 'them';
+      const san = legalOptions(fenAfter(before)).find(o => o.id === uci)?.label ?? uci;
+      const ply: Ply = { ply: i + 1, at: now.toISOString(), by, uci, san, fen: fenAfter(g.moves.slice(0, i + 1)) };
+      if (by === 'us') {
+        const d = this.recentDecisions.find(x => x.game === g.number && x.move === moveNumber(i) && x.chosen === uci);
+        if (d) Object.assign(ply, { kind: d.kind, price: d.price, tied: d.tied });
+      }
+      list.push(ply);
+    }
+  }
+
+  /** docs/chess.md "The player": claim the win when Lichess says it may be claimed. */
+  async onOpponentGone(ev: { gone: boolean; claimWinInSeconds?: number }, now: Date): Promise<void> {
+    if (!this.running() || !ev.gone) { this.claimAt = null; return; }
+    this.claimAt = now.getTime() + Math.max(0, ev.claimWinInSeconds ?? 0) * 1000;
+    if (now.getTime() >= this.claimAt) await this.claim();
+  }
+
+  private async claim(): Promise<void> {
+    const g = this.game;
+    this.claimAt = null;
+    if (!g || g.endedAt) return;
+    try { await this.lichess.claimVictory(g.id); } catch (e) { console.error(`claim victory ${g.id}: ${(e as Error).message}`); }
+  }
+
   // ---- the clock --------------------------------------------------------
 
   async tick(now: Date): Promise<void> {
@@ -293,6 +334,7 @@ export class Operator {
         if (t >= Date.parse(this.open.decideAt)) await this.close(now);
         else if (t - this.lastPollAt >= POLL_EVERY_MS) await this.poll(now);
       }
+      if (this.claimAt !== null && t >= this.claimAt) await this.claim();
       if (this.settlement && t >= this.settlement.nextTryAt) await this.trySettle(now);
       await this.seek(now);
     } finally {
@@ -432,6 +474,7 @@ export class Operator {
     return {
       game: this.game, open: this.open, recentDecisions: this.recentDecisions, games: this.games,
       settlement: this.settlement, playedPly: this.playedPly, recentOpponents: this.recentOpponents,
+      plies: this.plies,
     };
   }
 
@@ -444,6 +487,7 @@ export class Operator {
     op.settlement = raw.settlement ?? null;
     op.playedPly = raw.playedPly ?? null;
     op.recentOpponents = raw.recentOpponents ?? [];
+    op.plies = raw.plies ?? {};
     return op;
   }
 
@@ -508,7 +552,7 @@ export class Operator {
   history(game: number | 'current') {
     const g = game === 'current' ? this.games.at(-1) : this.games.find(x => x.number === game);
     if (!g) return null;
-    return { game: g };
+    return { game: g, plies: this.plies[g.number] ?? [] };
   }
 }
 
