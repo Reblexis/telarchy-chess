@@ -6,10 +6,12 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/main.js",
+    "stream": "node dist/stream.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.9",
     "chess.js": "1.4.0",
     "dotenv": "^17.4.2"
   },
