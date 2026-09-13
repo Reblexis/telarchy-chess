@@ -77,7 +77,10 @@ player never challenges a human.
 ## The workspace
 
 One public Telarchy workspace named `Chess` (slug `chess`), owned by the
-operator account, **muted** (`notificationsMuted` on) like the snake, with
+operator account: the participant **`chess-operator`** (nickname `chess`,
+its owner Viktor's account), the way `snake-operator` owns the Snake. Every
+proposal, reading and settlement on the floor is that account's; no person's
+name is on them, **muted** (`notificationsMuted` on) like the snake, with
 no charter, and closed to outside proposals (`externalProposalsDisabled`)
 where the store supports it.
 
@@ -131,8 +134,11 @@ When Lichess says it is TelarchyBot's turn:
   opponent and their rating, the move number, the opponent's last move in
   SAN, both clocks, the position as FEN, the Lichess game link, and the
   rule in one clause.
-- During the window the operator reads the proposal every 5 seconds and
-  publishes every option's price, lead and market id on `/state`.
+- The operator reads the proposal at once after posting it, so every
+  option's market id is on `/state` within a second of the proposal, then
+  every 5 seconds, publishing each option's price, lead and market id. The
+  floor draws the live prices from Telarchy's own once-a-second prices read,
+  not from these.
 - **Two seconds before the deadline** it reads once more and decides. An
   option's score is its **price**, the consensus of its own book:
   - the option with the highest price is **chosen**: the operator approves
@@ -213,9 +219,11 @@ as the `systemd --user` unit `telarchy-chess.service`, port 8803, Caddy
 serving `chess.167-233-147-90.nip.io` (and `chess.telarchy.com` once its A
 record exists). It is a light process: no engine, a few reads a minute.
 
-Configuration by environment: the Telarchy base URL, the operator key (or,
-on the admin-gated beta store, an admin session), the workspace and metric
-ids, the Lichess token (scopes `bot:play`, `challenge:read`,
+Configuration by environment: the Telarchy base URL, the operator's key
+(`chess-operator`, the only identity it acts as), on the admin-gated beta
+also an admin session that only opens the gate (a request carrying a
+participant key acts as that participant whatever session rides with it),
+the workspace and metric ids, the Lichess token (scopes `bot:play`, `challenge:read`,
 `challenge:write`), the port, the state file, and `SEEK` (off disables
 challenging bots, so the player only answers challenges).
 

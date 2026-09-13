@@ -195,6 +195,21 @@ describe('our turn is one proposal with every legal move', () => {
   });
 });
 
+describe('the market ids are published at once', () => {
+  it('the first price read happens at the first tick after posting, not five seconds later', async () => {
+    const f = fakes({ prices: () => ({ e2e4: { price: 50, lead: 0, marketId: 'm-e2e4' } }) });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(1));
+    expect(f.of('readPrices')).toHaveLength(1);
+    expect(op.publicState(at(1)).open?.options.find(o => o.id === 'e2e4')?.marketId).toBe('m-e2e4');
+    await op.tick(at(3));
+    expect(f.of('readPrices')).toHaveLength(1);
+    await op.tick(at(6));
+    expect(f.of('readPrices')).toHaveLength(2);
+  });
+});
+
 describe('two seconds before the deadline the market decides', () => {
   it('nothing is decided before second 18 of a 20-second window', async () => {
     const f = fakes({ prices: () => ({ e2e4: { price: 60, lead: 5, marketId: 'm' } }) });

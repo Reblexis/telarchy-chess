@@ -67,11 +67,12 @@ export class HttpTelarchyClient implements TelarchyClient {
   private async headers(): Promise<Record<string, string>> {
     const h: Record<string, string> = { 'X-Workspace-Id': this.o.workspaceId, 'Content-Type': 'application/json' };
     const cookies: string[] = [];
+    // The operator's key is who acts; on the admin-gated beta a session rides
+    // along only to open the gate (docs/chess.md, "Operation").
+    if (this.o.apiKey) h['X-Agent-Key'] = this.o.apiKey;
     if (this.o.session) {
       if (!this.cookie) await this.signIn();
       cookies.push(this.cookie!);
-    } else {
-      h['X-Agent-Key'] = this.o.apiKey;
     }
     if (this.o.branch) cookies.push(`telarchy_beta_branch=${this.o.branch}`);
     if (cookies.length) h['Cookie'] = cookies.join('; ');

@@ -63,6 +63,20 @@ describe('the Telarchy client', () => {
     expect(JSON.parse(call.body!)).toEqual({ refund: true });
   });
 
+  it('a key and a session together: the key is who acts, the session only opens the beta gate', async () => {
+    const { f, reqs } = fakeFetch(r =>
+      r.url.endsWith('/auth/sign-in/email')
+        ? { body: {}, headers: { 'set-cookie': ['better-auth.session_token=abc; Path=/; HttpOnly'] } }
+        : { body: { ok: true } },
+    );
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'op-key', branch: 'br-x', session: { email: 'a@b.c', password: 'pw', authUrl: 'https://telarchy.com/api' } }, f);
+    await c.declineProposal({ id: 'p1', number: 1, url: '' });
+    const call = reqs.find(r => r.url.endsWith('/proposals/p1/decline'))!;
+    expect(call.headers['x-agent-key']).toBe('op-key');
+    expect(call.headers.cookie).toContain('better-auth.session_token=abc');
+    expect(call.headers.cookie).toContain('telarchy_beta_branch=br-x');
+  });
+
   it('prices are read per option from the row on the game cell', async () => {
     const { f } = fakeFetch(() => ({
       body: {
