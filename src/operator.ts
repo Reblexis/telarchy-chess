@@ -254,7 +254,8 @@ export class Operator {
       deadline: deadline.toISOString(),
       quotes: null, quotesAt: null,
     };
-    this.lastPollAt = now.getTime();
+    // docs/chess.md "The move": read at once, so every option's market id is on /state within a tick.
+    this.lastPollAt = 0;
   }
 
   private describe(g: GameRecord, move: number): string {
