@@ -121,21 +121,42 @@ export interface OnlineBot {
   perfs?: { classical?: { rating?: number; games?: number; prov?: boolean } };
 }
 
+/** How the search loosens when nobody qualifies (docs/chess.md "Opponents", Viktor 2026-09-14):
+ *  strangers within 200, then recent opponents too, then the band at 300 and 400. */
+export const SEEK_STEPS: ReadonlyArray<{ band: number; recentAllowed: boolean }> = [
+  { band: 200, recentAllowed: false },
+  { band: 200, recentAllowed: true },
+  { band: 300, recentAllowed: true },
+  { band: 400, recentAllowed: true },
+];
+/** The widest band the search tries before giving up. */
+export const SEEK_MAX_BAND = 400;
+
 /** docs/chess.md "Opponents": a bot with an established classical rating within
- *  200 of ours (any while ours is provisional), not recent, not ourselves. */
+ *  200 of ours (any while ours is provisional), not recent, not ourselves; when
+ *  nobody qualifies, the steps of SEEK_STEPS in order, and never the very last
+ *  opponent (`recent` is newest first). */
 export function pickOpponent(
   bots: OnlineBot[],
   me: { username: string; rating: number; provisional: boolean },
   recent: string[],
   rng: Rng,
 ): string | null {
-  const recentIds = new Set(recent.map(r => r.toLowerCase()));
-  const pool = bots.filter(b => {
+  const recentIds = recent.map(r => r.toLowerCase());
+  const last = recentIds[0] ?? null;
+  const recentSet = new Set(recentIds);
+  const eligible = bots.filter(b => {
     const c = b.perfs?.classical;
     if (b.username.toLowerCase() === me.username.toLowerCase()) return false;
-    if (recentIds.has(b.id.toLowerCase())) return false;
-    if (!c || typeof c.rating !== 'number' || c.prov || !c.games) return false;
-    return me.provisional || Math.abs(c.rating - me.rating) <= 200;
+    if (b.id.toLowerCase() === last) return false;
+    return !!c && typeof c.rating === 'number' && !c.prov && !!c.games;
   });
-  return pool.length ? pick(pool, rng).id : null;
+  for (const step of SEEK_STEPS) {
+    const pool = eligible.filter(b => {
+      if (!step.recentAllowed && recentSet.has(b.id.toLowerCase())) return false;
+      return me.provisional || Math.abs((b.perfs?.classical?.rating as number) - me.rating) <= step.band;
+    });
+    if (pool.length) return pick(pool, rng).id;
+  }
+  return null;
 }
