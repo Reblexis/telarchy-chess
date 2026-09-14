@@ -161,3 +161,55 @@ describe('which bot is challenged', () => {
     expect(pickOpponent([bot('Far', 2100)], { username: 'TelarchyBot', rating: 1500, provisional: false }, [], seq(0))).toBeNull();
   });
 });
+
+describe('when nobody qualifies, the rule loosens in order (Viktor 2026-09-14)', () => {
+  const bot = (username: string, rating: number, prov = false, games = 100) => ({ id: username.toLowerCase(), username, perfs: { classical: { rating, games, prov } } });
+  const me = { username: 'TelarchyBot', rating: 1000, provisional: false };
+  // recent is newest first: 'last' is the very last opponent.
+  const recent = ['last', 'r2', 'r3', 'r4', 'r5'];
+
+  it('Rookie found nobody (2026-09-14): with every bot in the band a recent opponent, one of them is challenged again', () => {
+    const bots = [bot('Last', 1050), bot('R2', 1100), bot('R3', 950)];
+    const pool = new Set<string | null>();
+    for (const r of [0, 0.5, 0.99]) pool.add(pickOpponent(bots, me, recent, seq(r)));
+    expect([...pool].sort()).toEqual(['r2', 'r3']);
+  });
+
+  it('the very last opponent is never challenged twice in a row, even when it is the only one in the band', () => {
+    expect(pickOpponent([bot('Last', 1050)], me, recent, seq(0))).toBeNull();
+  });
+
+  it('a stranger in the 200 band wins over a recent opponent', () => {
+    expect(pickOpponent([bot('R2', 1050), bot('Stranger', 1150)], me, recent, seq(0))).toBe('stranger');
+  });
+
+  it('a recent opponent within 200 wins over a stranger at 300', () => {
+    expect(pickOpponent([bot('Wider', 1280), bot('R2', 1150)], me, recent, seq(0))).toBe('r2');
+  });
+
+  it('then the band widens to 300, then 400, taking the first step that finds someone', () => {
+    expect(pickOpponent([bot('At300', 1290), bot('At400', 1390)], me, [], seq(0))).toBe('at300');
+    expect(pickOpponent([bot('At400', 1390)], me, [], seq(0))).toBe('at400');
+    expect(pickOpponent([bot('Below400', 610)], me, [], seq(0))).toBe('below400');
+  });
+
+  it('past 400 nobody is challenged', () => {
+    expect(pickOpponent([bot('Far', 1401), bot('Farther', 550)], me, [], seq(0))).toBeNull();
+  });
+
+  it('the very last opponent stays out at the widened steps too', () => {
+    expect(pickOpponent([bot('Last', 1300)], me, recent, seq(0))).toBeNull();
+    expect(pickOpponent([bot('Last', 1300), bot('R3', 1350)], me, recent, seq(0))).toBe('r3');
+  });
+
+  it('while ours is provisional any established rating qualifies, and the very last opponent is still never challenged', () => {
+    const provisional = { ...me, provisional: true };
+    expect(pickOpponent([bot('Last', 2500)], provisional, recent, seq(0))).toBeNull();
+    expect(pickOpponent([bot('Last', 2500), bot('R2', 2600)], provisional, recent, seq(0))).toBe('r2');
+  });
+
+  it('still never ourselves, a provisional bot, or a bot without a classical rating', () => {
+    const bots = [bot('TelarchyBot', 1000), bot('Prov', 1000, true), { id: 'noclassical', username: 'NoClassical', perfs: {} }];
+    expect(pickOpponent(bots, me, [], seq(0))).toBeNull();
+  });
+});
