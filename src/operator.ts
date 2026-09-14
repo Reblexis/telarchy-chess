@@ -26,6 +26,8 @@ export type Prices = Record<string, { price: number | null; lead: number | null;
 export interface PlayNowWorlds {
   approved: { price: number | null; marketId: string | null };
   declined: { price: number | null; marketId: string | null };
+  /** The proposal's status as Telarchy records it (`pending`, `approved`, `declined`, ...). */
+  status: string | null;
 }
 
 /** The Telarchy calls the operator makes. Deliberately no trade method:
@@ -83,6 +85,8 @@ export interface DecisionRecord {
   price: number | null; tied: number; kind: DecisionKind; undecidedReason: string | null;
   /** Played before the window ended, because a play-now proposal was approved. */
   early?: boolean;
+  /** Why this decision disagrees with what Telarchy recorded, when it does. */
+  note?: string;
 }
 
 interface Player { id?: string; name?: string; title?: string | null; rating?: number }
@@ -115,6 +119,8 @@ interface OpenMove {
 }
 
 interface OpenPlayNow { proposal: ProposalRef; postedAt: string; deadline: string; worlds: PlayNowWorlds | null }
+/** A play-now proposal past its deadline whose outcome in Telarchy is not known yet. */
+interface Unsettled { proposal: ProposalRef; game: number; move: number; since: number; checkedAt: number }
 
 export interface Ply {
   ply: number; at: string; by: 'us' | 'them'; uci: string; san: string; fen: string;
@@ -176,6 +182,7 @@ export class Operator {
   /** A play-now post has not answered yet: nothing new is posted until it has. */
   private playNowPosting = false;
   private lastPlayNowAt = 0;
+  unsettled: Unsettled[] = [];
 
   constructor(
     private telarchy: TelarchyClient,
@@ -370,6 +377,7 @@ export class Operator {
     this.busyTick = true;
     try {
       const t = now.getTime();
+      if (this.unsettled.length) await this.checkUnsettled(now);
       if (this.open) {
         if (t >= Date.parse(this.open.decideAt)) await this.close(now);
         else {
@@ -415,6 +423,7 @@ export class Operator {
       if (this.open !== open) return; // approved: the move is played
     }
     if (this.playNowPosting) return;
+    if (this.unsettled.some(u => u.game === open.game && u.move === open.move)) return;
     if (Date.parse(open.decideAt) - t <= PLAY_NOW.stopBeforeDecisionMs) return;
     if (t - this.lastPlayNowAt < PLAY_NOW.everyMs) return;
     await this.postPlayNow(now);
@@ -471,16 +480,68 @@ export class Operator {
         await within(this.telarchy.approveProposal(pn.proposal), this.callMs);
       } catch (e) {
         console.error(`play now approve ${pn.proposal.id}: ${(e as Error).message}`);
-        return this.declineWithin(pn.proposal);
+        return this.settlePlayNow(pn.proposal, open.game, open.move, now, true);
       }
       if (this.open !== open) return;
       return this.close(now, true);
     }
-    return this.declineWithin(pn.proposal);
+    return this.settlePlayNow(pn.proposal, open.game, open.move, now, false);
   }
 
-  private async declineWithin(ref: ProposalRef): Promise<void> {
-    try { await within(this.telarchy.declineProposal(ref), this.callMs); } catch (e) { console.error(`decline ${ref.id}: ${(e as Error).message}`); }
+  /** docs/chess.md "Play now?": whatever Telarchy finally records is what
+   *  happens. Decline it; when an approval may have landed (a timed-out or
+   *  refused approve, a refused decline) read its status, and an approved
+   *  proposal plays the move. What stays unknown is checked on later ticks. */
+  private async settlePlayNow(ref: ProposalRef, game: number, move: number, now: Date, readFirst: boolean): Promise<void> {
+    if (readFirst) {
+      const s = await this.statusOf(ref);
+      if (s === 'approved') return this.lateApproved(ref, game, move, now);
+      if (s !== null && s !== 'pending') return;
+    }
+    try {
+      await within(this.telarchy.declineProposal(ref), this.callMs);
+      return;
+    } catch (e) {
+      console.error(`decline ${ref.id}: ${(e as Error).message}`);
+    }
+    const s = await this.statusOf(ref);
+    if (s === 'approved') return this.lateApproved(ref, game, move, now);
+    if (s !== null && s !== 'pending') return;
+    this.unsettled.push({ proposal: ref, game, move, since: now.getTime(), checkedAt: now.getTime() });
+  }
+
+  private async statusOf(ref: ProposalRef): Promise<string | null> {
+    try {
+      return (await within(this.telarchy.readPlayNow(ref, this.game?.cell ?? null), this.callMs)).status ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Approved in Telarchy: play the move now if its proposal is still open and
+   *  the game still on; otherwise say so on the decision already made. */
+  private async lateApproved(ref: ProposalRef, game: number, move: number, now: Date): Promise<void> {
+    const open = this.open;
+    if (open && open.game === game && open.move === move && this.running()) return this.close(now, true);
+    const reason = `play-now #${ref.number} was approved after the move was decided; its approved book settles with the game`;
+    console.error(`game ${game} move ${move}: ${reason}`);
+    const d = this.recentDecisions.find(x => x.game === game && x.move === move);
+    if (d) d.note = reason;
+  }
+
+  /** Once a second each: read the status again and retry the decline, for up to five minutes. */
+  private async checkUnsettled(now: Date): Promise<void> {
+    const t = now.getTime();
+    for (const u of [...this.unsettled]) {
+      if (t - u.checkedAt < PLAY_NOW.everyMs) continue;
+      u.checkedAt = t;
+      const drop = () => { this.unsettled = this.unsettled.filter(x => x !== u); };
+      const s = await this.statusOf(u.proposal);
+      if (s === 'approved') { drop(); await this.lateApproved(u.proposal, u.game, u.move, now); continue; }
+      if (s !== null && s !== 'pending') { drop(); continue; }
+      if (t - u.since > 300_000) { drop(); console.error(`play-now #${u.proposal.number}: outcome still unknown after five minutes`); continue; }
+      try { await within(this.telarchy.declineProposal(u.proposal), this.callMs); drop(); } catch { /* read again next second */ }
+    }
   }
 
   // ---- the decision -----------------------------------------------------
@@ -490,8 +551,9 @@ export class Operator {
   private async close(now: Date, early = false): Promise<void> {
     const pn = this.open?.playNow ?? null;
     if (this.open) this.open.playNow = null;
+    const at = this.open ? { game: this.open.game, move: this.open.move } : null;
     await this.closeMove(now, early);
-    if (pn) await this.declineWithin(pn.proposal);
+    if (pn && at) await this.settlePlayNow(pn.proposal, at.game, at.move, now, false);
   }
 
   private async closeMove(now: Date, early: boolean): Promise<void> {
@@ -623,7 +685,7 @@ export class Operator {
     return {
       game: this.game, open: this.open, recentDecisions: this.recentDecisions, games: this.games,
       settlement: this.settlement, playedPly: this.playedPly, recentOpponents: this.recentOpponents,
-      plies: this.plies,
+      plies: this.plies, unsettled: this.unsettled,
     };
   }
 
@@ -637,6 +699,7 @@ export class Operator {
     op.playedPly = raw.playedPly ?? null;
     op.recentOpponents = raw.recentOpponents ?? [];
     op.plies = raw.plies ?? {};
+    op.unsettled = raw.unsettled ?? [];
     return op;
   }
 

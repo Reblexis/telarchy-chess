@@ -117,7 +117,7 @@ export class HttpTelarchyClient implements TelarchyClient {
     const r = await this.call('GET', `/proposals/${encodeURIComponent(ref.id)}`);
     const row = pickRow((Array.isArray(r?.markets) ? r.markets : []).filter((x: any) => x && !Array.isArray(x.options)), cell);
     const world = (w: any) => ({ price: num(w?.consensus), marketId: typeof w?.marketId === 'string' ? w.marketId : null });
-    return { approved: world(row?.approved), declined: world(row?.declined) };
+    return { approved: world(row?.approved), declined: world(row?.declined), status: typeof r?.status === 'string' ? r.status : null };
   }
 
   async approveProposal(ref: ProposalRef): Promise<void> {

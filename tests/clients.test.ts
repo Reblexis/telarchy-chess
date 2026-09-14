@@ -136,6 +136,7 @@ describe('the Telarchy client', () => {
   it('the play-now read takes the approved and the declined world from the row on the game cell', async () => {
     const { f, reqs } = fakeFetch(() => ({
       body: {
+        status: 'pending',
         markets: [
           { targetDate: '2026-09-15T10:00', options: null, approved: { marketId: 'wrong', consensus: 1 }, declined: { marketId: 'wrong2', consensus: 2 } },
           { targetDate: CELL, options: null, approved: { marketId: 'ma', consensus: 61.5 }, declined: { marketId: 'md', consensus: null } },
@@ -146,12 +147,14 @@ describe('the Telarchy client', () => {
     expect(await c.readPlayNow({ id: 'p2', number: 2, url: '' }, CELL)).toEqual({
       approved: { price: 61.5, marketId: 'ma' },
       declined: { price: null, marketId: 'md' },
+      status: 'pending',
     });
     expect(reqs[0].url).toBe('https://telarchy.com/beta/api/proposals/p2');
     const empty = fakeFetch(() => ({ body: { markets: [] } }));
     expect(await new HttpTelarchyClient({ ...base, apiKey: 'k' }, empty.f).readPlayNow({ id: 'p2', number: 2, url: '' }, CELL)).toEqual({
       approved: { price: null, marketId: null },
       declined: { price: null, marketId: null },
+      status: null,
     });
   });
 

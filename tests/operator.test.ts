@@ -24,12 +24,19 @@ function fakes(opts: {
   /** The first play-now post / read never answers until `release()`. */
   hangPlayNowPost?: boolean;
   hangPlayNowRead?: boolean;
+  /** 'lost': Telarchy records the approval but the answer never comes.
+   *  'late': the approval lands only on release(). 'onDecline': it lands just before the operator's decline arrives. */
+  approveLate?: 'lost' | 'late' | 'onDecline';
+  /** Play-now declines never answer until release(), then are refused if the proposal is approved. */
+  hangPlayNowDecline?: boolean;
 } = {}) {
   const calls: Call[] = [];
   let n = 0;
   const hung: Array<() => void> = [];
   let hangPost = !!opts.hangPlayNowPost;
   let hangRead = !!opts.hangPlayNowRead;
+  const status: Record<string, string> = {};
+  const inFlight = new Set<string>();
   let settleFails = opts.settleFailures ?? 0;
   const telarchy: TelarchyClient = {
     async setHorizon(cell) { calls.push({ name: 'setHorizon', args: [cell] }); },
@@ -48,7 +55,14 @@ function fakes(opts: {
       calls.push({ name: 'approveOption', args: [ref.id, option] });
       if (opts.failApprove) throw new Error('approve -> 409 proposal_closed');
     },
-    async declineProposal(ref) { calls.push({ name: 'declineProposal', args: [ref.id] }); },
+    async declineProposal(ref) {
+      calls.push({ name: 'declineProposal', args: [ref.id] });
+      if (!(ref.id in status)) return;
+      if (inFlight.has(ref.id)) { inFlight.delete(ref.id); status[ref.id] = 'approved'; }
+      const finish = () => { if (status[ref.id] === 'approved') throw new Error('decline -> 409 already approved'); status[ref.id] = 'declined'; };
+      if (opts.hangPlayNowDecline) return new Promise((resolve, reject) => hung.push(() => { try { finish(); resolve(); } catch (e) { reject(e); } }));
+      finish();
+    },
     async postPlayNow(title, description, decideBy) {
       calls.push({ name: 'postPlayNow', args: [title, description, decideBy.toISOString()] });
       if (hangPost) {
@@ -56,6 +70,7 @@ function fakes(opts: {
         return new Promise(resolve => hung.push(() => { n++; resolve({ id: `p${n}`, number: n, url: `https://telarchy.com/beta/chess/p/${n}` }); }));
       }
       n++;
+      status[`p${n}`] = 'pending';
       return { id: `p${n}`, number: n, url: `https://telarchy.com/beta/chess/p/${n}` };
     },
     async readPlayNow(ref) {
@@ -63,11 +78,15 @@ function fakes(opts: {
       if (hangRead) { hangRead = false; return new Promise(() => {}); }
       if (opts.failPlayNowRead) throw new Error('read -> 500');
       const p = opts.playNow ? opts.playNow(ref.number) : { approved: null, declined: null };
-      return { approved: { price: p.approved, marketId: `a${ref.number}` }, declined: { price: p.declined, marketId: `d${ref.number}` } };
+      return { approved: { price: p.approved, marketId: `a${ref.number}` }, declined: { price: p.declined, marketId: `d${ref.number}` }, status: status[ref.id] ?? 'pending' };
     },
     async approveProposal(ref) {
       calls.push({ name: 'approveProposal', args: [ref.id] });
       if (opts.failPlayNowApprove) throw new Error('approve -> 409 proposal_closed');
+      if (opts.approveLate === 'lost') { status[ref.id] = 'approved'; return new Promise(() => {}); }
+      if (opts.approveLate === 'onDecline') { inFlight.add(ref.id); return new Promise(() => {}); }
+      if (opts.approveLate === 'late') return new Promise(resolve => hung.push(() => { status[ref.id] = 'approved'; resolve(); }));
+      status[ref.id] = 'approved';
     },
     async postReading(value, when) { calls.push({ name: 'postReading', args: [value, when.toISOString()] }); },
     async settleMetric(value, when, reason) {
@@ -778,5 +797,52 @@ describe('play now?', () => {
     await op.tick(at(2.5));
     expect(f.of('declineProposal')[0].args[0]).toBe('p2');
     expect(f.of('postPlayNow').length).toBeGreaterThanOrEqual(2);
+  });
+
+  describe('whatever Telarchy finally records is what happens', () => {
+    const prices = () => ({ e2e4: { price: 52, lead: -3, marketId: 'm1' }, d2d4: { price: 55, lead: 3, marketId: 'm2' } });
+    const APPROVE = () => ({ approved: 60, declined: 50 });
+
+    it('an approve that times out and lands before the decline: the refused decline shows it approved, and the move is played at once', async () => {
+      const f = fakes({ approveLate: 'onDecline', playNow: APPROVE, prices });
+      const op = operator(f);
+      await op.onGameFull(full('white'), T0);
+      await op.tick(at(0.5));
+      await op.tick(at(1.5));
+      expect(f.of('declineProposal').map(c => c.args[0])).toEqual(['p2']);
+      expect(f.of('approveOption')).toEqual([{ name: 'approveOption', args: ['p1', 'd2d4'] }]);
+      expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'd2d4'] }]);
+      expect(op.recentDecisions[0]).toMatchObject({ chosen: 'd2d4', kind: 'market', early: true });
+    });
+
+    it('an approve that times out but was recorded: the read after the timeout shows it approved, and the move is played at once without a decline', async () => {
+      const f = fakes({ approveLate: 'lost', playNow: APPROVE, prices });
+      const op = operator(f);
+      await op.onGameFull(full('white'), T0);
+      await op.tick(at(0.5));
+      await op.tick(at(1.5));
+      expect(f.of('declineProposal')).toHaveLength(0);
+      expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'd2d4'] }]);
+      expect(op.recentDecisions[0]).toMatchObject({ early: true });
+    });
+
+    it('an approval that lands only after the move was decided is recorded on that decision with a reason, and no play-now is posted while it is unknown', async () => {
+      const f = fakes({ approveLate: 'late', hangPlayNowDecline: true, playNow: APPROVE, prices });
+      const op = operator(f);
+      await op.onGameFull(full('white'), T0);
+      await op.tick(at(14.5)); // posts p2, deadline 15.5
+      await op.tick(at(15.5)); // approve and decline both go unanswered
+      await op.tick(at(16.5));
+      await op.tick(at(17.5));
+      expect(f.of('postPlayNow')).toHaveLength(1);
+      await op.tick(at(18)); // the move decides at its own deadline
+      expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'd2d4'] }]);
+      expect(op.recentDecisions[0].early).toBeFalsy();
+      f.release();
+      await flush();
+      await op.tick(at(19));
+      expect(op.recentDecisions[0].note).toMatch(/play-now #2 was approved after the move was decided/);
+      expect(f.of('move')).toHaveLength(1);
+    });
   });
 });

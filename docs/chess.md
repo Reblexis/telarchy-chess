@@ -197,6 +197,15 @@ waits and the move is made after one minute at the latest"; chess only).
   is declined. The move's own decision never waits for a play-now call: a
   play-now proposal still open when the move decides is declined after the
   move is played.
+- **Whatever Telarchy finally records is what happens.** When an approve
+  gets no answer or is refused, or a decline is refused, the operator reads
+  the proposal's status. Approved means approved: if the move's proposal is
+  still open and the game still on, the move is decided at once and played.
+  If the move was already decided, that decision in `recentDecisions`
+  carries a `note` saying so, and the approved book settles with the game.
+  A status still unknown is read again every second, the decline retried,
+  for up to five minutes, and no play-now proposal is posted for that move
+  meanwhile.
 - **Liquidity.** Each play-now book holds **100 credits**, from the owner
   (the move proposal's option books keep 1,000), and both void and refund
   at the decision except the approved world's, which settles with the
