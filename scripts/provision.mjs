@@ -55,6 +55,15 @@ const metric = await call('POST', '/metrics', {
   timePreference: { enabled: false, customHorizons: [cell], horizonCredits: { [cell]: { book: 3000, proposal: 1000 } } },
 }, wsId);
 
+// The floor's question, in the owner's words (docs/chess.md, "The workspace").
+console.error('# metric question');
+await call('PUT', `/metrics/${metric.id}`, { marketTitle: 'What score will I reach this game?' }, wsId);
+
+// The bot's name on Telarchy: the operator is the proposer of every move (docs/chess.md, "The workspace").
+// The workspace header is required: without it the store answers 401 for this key.
+console.error('# operator nickname Rookie');
+await call('POST', '/auth/profile', { nickname: 'Rookie' }, wsId);
+
 console.error('# settings: one-minute decision window, public, muted, closed to outside proposals');
 await call('PUT', `/workspaces/${wsId}/settings`, {
   decisionMinutes: 1,
