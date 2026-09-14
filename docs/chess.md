@@ -187,9 +187,10 @@ waits and the move is made after one minute at the latest"; chess only).
   no further play-now proposal is posted for that move.
 - **Otherwise nothing changes.** The move proposal still decides at its own
   deadline, within the minute at the latest, as before.
-- **Liquidity.** Each play-now book holds the metric's proposal credits,
-  1,000 a book, from the owner, and both void and refund at the decision
-  except the approved world's, which settles with the game.
+- **Liquidity.** Each play-now book holds **100 credits**, from the owner
+  (the move proposal's option books keep 1,000), and both void and refund
+  at the decision except the approved world's, which settles with the
+  game.
 - **On the feed.** `/state` carries `open.playNow`: `{ proposal: {id,
   number, url}, deadline, tradeable, approved: { price, marketId },
   declined: { price, marketId } }`, or null between them, and
