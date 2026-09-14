@@ -1,6 +1,6 @@
 // The Telarchy client the chess operator uses (docs/chess.md, "The workspace"
 // and "The move"). Deliberately has no trade method: the operator never trades.
-import type { Prices, ProposalRef, TelarchyClient } from './operator.js';
+import type { PlayNowWorlds, Prices, ProposalRef, TelarchyClient } from './operator.js';
 import type { MoveOption } from './rules.js';
 
 export interface SessionAuth {
@@ -26,6 +26,10 @@ export interface TelarchyOptions {
 /** docs/chess.md "Liquidity": the main book and each option book. */
 export const MAIN_BOOK_CREDITS = 3000;
 export const OPTION_BOOK_CREDITS = 1000;
+/** docs/chess.md "Play now?": each of a play-now proposal's two books. The
+ *  operator names it as the proposal's own subsidy, so the date's 1,000 (the
+ *  owner's fallback when nobody pays) never applies to it. */
+export const PLAY_NOW_BOOK_CREDITS = 100;
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
@@ -102,20 +106,30 @@ export class HttpTelarchyClient implements TelarchyClient {
     return { id: String(r.id), number: Number(r.number), url: `${this.o.workspaceUrl}/p/${r.number}` };
   }
 
+  /** docs/chess.md "Play now?": a plain two-world proposal, both books funded by the operator. */
+  async postPlayNow(title: string, description: string, decideBy: Date): Promise<ProposalRef> {
+    const r = await this.call('POST', '/proposals', { title, description, decideBy: decideBy.toISOString(), liquiditySubsidy: PLAY_NOW_BOOK_CREDITS });
+    return { id: String(r.id), number: Number(r.number), url: `${this.o.workspaceUrl}/p/${r.number}` };
+  }
+
+  /** The approved and declined worlds of a play-now proposal on the game's cell. */
+  async readPlayNow(ref: ProposalRef, cell: string | null): Promise<PlayNowWorlds> {
+    const r = await this.call('GET', `/proposals/${encodeURIComponent(ref.id)}`);
+    const row = pickRow((Array.isArray(r?.markets) ? r.markets : []).filter((x: any) => x && !Array.isArray(x.options)), cell);
+    const world = (w: any) => ({ price: num(w?.consensus), marketId: typeof w?.marketId === 'string' ? w.marketId : null });
+    return { approved: world(row?.approved), declined: world(row?.declined) };
+  }
+
+  async approveProposal(ref: ProposalRef): Promise<void> {
+    await this.call('POST', `/proposals/${encodeURIComponent(ref.id)}/approve`, {});
+  }
+
   /** Each option's price, lead and market from the proposal's row on the game's
    *  cell, found by target date or, failing that, by its settlement instant. */
   async readPrices(ref: ProposalRef, cell: string | null): Promise<Prices> {
     const r = await this.call('GET', `/proposals/${encodeURIComponent(ref.id)}`);
     const rows: any[] = Array.isArray(r?.markets) ? r.markets : [];
-    const withOptions = rows.filter(x => Array.isArray(x?.options));
-    let row: any;
-    if (cell) {
-      const end = Date.parse(`${cell}:00Z`) + 60_000;
-      row = withOptions.find(x => x.targetDate === cell) ??
-        withOptions.find(x => !x.targetDate && typeof x.resolvesOn === 'string' && Date.parse(x.resolvesOn) === end);
-    } else {
-      row = withOptions[0];
-    }
+    const row = pickRow(rows.filter(x => Array.isArray(x?.options)), cell);
     const out: Prices = {};
     for (const o of row?.options ?? []) {
       if (typeof o?.id !== 'string') continue;
@@ -154,4 +168,13 @@ export class HttpTelarchyClient implements TelarchyClient {
   async settleMetric(value: number, at: Date, reason: string): Promise<void> {
     await this.call('POST', `/metrics/${encodeURIComponent(this.o.metricId)}/settle`, { value, asOf: at.toISOString(), reason });
   }
+}
+
+/** The proposal's row on the game's cell, found by target date or, failing
+ *  that, by its settlement instant; the first row when no cell is known. */
+function pickRow(rows: any[], cell: string | null): any {
+  if (!cell) return rows[0];
+  const end = Date.parse(`${cell}:00Z`) + 60_000;
+  return rows.find(x => x.targetDate === cell) ??
+    rows.find(x => !x.targetDate && typeof x.resolvesOn === 'string' && Date.parse(x.resolvesOn) === end);
 }

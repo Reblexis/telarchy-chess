@@ -1,7 +1,7 @@
 // The HTTP clients against a fake fetch: the calls docs/chess.md names, the
 // beta session and branch cookie, and no trade, draw or resign anywhere.
 import { describe, it, expect } from 'vitest';
-import { HttpTelarchyClient } from '../src/telarchy.js';
+import { HttpTelarchyClient, PLAY_NOW_BOOK_CREDITS } from '../src/telarchy.js';
 import { HttpLichessClient, ndjsonLines } from '../src/lichess.js';
 
 type Req = { url: string; method: string; headers: Record<string, string>; body: string | null };
@@ -119,6 +119,49 @@ describe('the Telarchy client', () => {
     expect(JSON.parse(reqs.find(r => r.body?.includes('"value":100') && r.method === 'PUT')!.body!)).toMatchObject({ value: 100, asOf: '2026-09-13T15:00:00.000Z' });
     const settle = reqs.find(r => r.url.endsWith('/metrics/m1/settle'))!;
     expect(JSON.parse(settle.body!)).toEqual({ value: 100, asOf: '2026-09-13T15:00:00.000Z', reason: 'Game 1 vs X: win' });
+  });
+
+  it('a play-now proposal is a plain proposal whose two books the operator funds at 100 credits each', async () => {
+    const { f, reqs } = fakeFetch(() => ({ status: 201, body: { id: 'p2', number: 2 } }));
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, f);
+    const ref = await c.postPlayNow('Game 1, move 1: play now?', 'desc', new Date('2026-09-13T14:00:01Z'));
+    expect(ref).toEqual({ id: 'p2', number: 2, url: 'https://telarchy.com/beta/chess/p/2' });
+    expect(reqs[0].url).toBe('https://telarchy.com/beta/api/proposals');
+    expect(JSON.parse(reqs[0].body!)).toEqual({
+      title: 'Game 1, move 1: play now?', description: 'desc', decideBy: '2026-09-13T14:00:01.000Z', liquiditySubsidy: 100,
+    });
+    expect(PLAY_NOW_BOOK_CREDITS).toBe(100);
+  });
+
+  it('the play-now read takes the approved and the declined world from the row on the game cell', async () => {
+    const { f, reqs } = fakeFetch(() => ({
+      body: {
+        markets: [
+          { targetDate: '2026-09-15T10:00', options: null, approved: { marketId: 'wrong', consensus: 1 }, declined: { marketId: 'wrong2', consensus: 2 } },
+          { targetDate: CELL, options: null, approved: { marketId: 'ma', consensus: 61.5 }, declined: { marketId: 'md', consensus: null } },
+        ],
+      },
+    }));
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, f);
+    expect(await c.readPlayNow({ id: 'p2', number: 2, url: '' }, CELL)).toEqual({
+      approved: { price: 61.5, marketId: 'ma' },
+      declined: { price: null, marketId: 'md' },
+    });
+    expect(reqs[0].url).toBe('https://telarchy.com/beta/api/proposals/p2');
+    const empty = fakeFetch(() => ({ body: { markets: [] } }));
+    expect(await new HttpTelarchyClient({ ...base, apiKey: 'k' }, empty.f).readPlayNow({ id: 'p2', number: 2, url: '' }, CELL)).toEqual({
+      approved: { price: null, marketId: null },
+      declined: { price: null, marketId: null },
+    });
+  });
+
+  it('approving a play-now proposal names no option', async () => {
+    const { f, reqs } = fakeFetch(() => ({ body: { ok: true } }));
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, f);
+    await c.approveProposal({ id: 'p2', number: 2, url: '' });
+    expect(reqs[0].method).toBe('POST');
+    expect(reqs[0].url).toBe('https://telarchy.com/beta/api/proposals/p2/approve');
+    expect(JSON.parse(reqs[0].body!)).toEqual({});
   });
 
   it('the operator client has no way to trade', () => {

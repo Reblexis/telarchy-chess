@@ -17,9 +17,19 @@ function fakes(opts: {
   failApprove?: boolean;
   settleFailures?: number;
   bots?: unknown[];
+  /** The two worlds of a play-now proposal by its number. */
+  playNow?: (proposalNumber: number) => { approved: number | null; declined: number | null };
+  failPlayNowRead?: boolean;
+  failPlayNowApprove?: boolean;
+  /** The first play-now post / read never answers until `release()`. */
+  hangPlayNowPost?: boolean;
+  hangPlayNowRead?: boolean;
 } = {}) {
   const calls: Call[] = [];
   let n = 0;
+  const hung: Array<() => void> = [];
+  let hangPost = !!opts.hangPlayNowPost;
+  let hangRead = !!opts.hangPlayNowRead;
   let settleFails = opts.settleFailures ?? 0;
   const telarchy: TelarchyClient = {
     async setHorizon(cell) { calls.push({ name: 'setHorizon', args: [cell] }); },
@@ -39,6 +49,26 @@ function fakes(opts: {
       if (opts.failApprove) throw new Error('approve -> 409 proposal_closed');
     },
     async declineProposal(ref) { calls.push({ name: 'declineProposal', args: [ref.id] }); },
+    async postPlayNow(title, description, decideBy) {
+      calls.push({ name: 'postPlayNow', args: [title, description, decideBy.toISOString()] });
+      if (hangPost) {
+        hangPost = false;
+        return new Promise(resolve => hung.push(() => { n++; resolve({ id: `p${n}`, number: n, url: `https://telarchy.com/beta/chess/p/${n}` }); }));
+      }
+      n++;
+      return { id: `p${n}`, number: n, url: `https://telarchy.com/beta/chess/p/${n}` };
+    },
+    async readPlayNow(ref) {
+      calls.push({ name: 'readPlayNow', args: [ref.id] });
+      if (hangRead) { hangRead = false; return new Promise(() => {}); }
+      if (opts.failPlayNowRead) throw new Error('read -> 500');
+      const p = opts.playNow ? opts.playNow(ref.number) : { approved: null, declined: null };
+      return { approved: { price: p.approved, marketId: `a${ref.number}` }, declined: { price: p.declined, marketId: `d${ref.number}` } };
+    },
+    async approveProposal(ref) {
+      calls.push({ name: 'approveProposal', args: [ref.id] });
+      if (opts.failPlayNowApprove) throw new Error('approve -> 409 proposal_closed');
+    },
     async postReading(value, when) { calls.push({ name: 'postReading', args: [value, when.toISOString()] }); },
     async settleMetric(value, when, reason) {
       calls.push({ name: 'settleMetric', args: [value, when.toISOString(), reason] });
@@ -60,7 +90,8 @@ function fakes(opts: {
   };
   const names = () => calls.map(c => c.name);
   const of = (name: string) => calls.filter(c => c.name === name);
-  return { telarchy, lichess, calls, names, of };
+  const release = () => { for (const h of hung.splice(0)) h(); };
+  return { telarchy, lichess, calls, names, of, release };
 }
 
 const full = (color: 'white' | 'black', over: Record<string, unknown> = {}) => ({
@@ -75,7 +106,7 @@ const full = (color: 'white' | 'black', over: Record<string, unknown> = {}) => (
 const st = (moves: string, over: Record<string, unknown> = {}) => ({ moves, wtime: 1_800_000, btime: 1_800_000, winc: 20_000, binc: 20_000, status: 'started', ...over });
 
 function operator(f: ReturnType<typeof fakes>, rng = seq(0), seek = true) {
-  return new Operator(f.telarchy, f.lichess, rng, { username: ME, seek, workspaceId: 'ws-chess' });
+  return new Operator(f.telarchy, f.lichess, rng, { username: ME, seek, workspaceId: 'ws-chess', playNowCallMs: 30 });
 }
 
 const challenge = (over: Record<string, unknown> = {}) => ({
@@ -542,5 +573,210 @@ describe("the player's record", () => {
     (f.lichess as { account: () => Promise<unknown> }).account = async () => { throw new Error('lichess 429'); };
     await op.tick(at(61));
     expect(op.publicState(at(62)).player?.games.played).toBe(6);
+  });
+});
+
+describe('play now?', () => {
+  // Game 1 as white: the first move's window is 20 s, so it decides at second 18
+  // and a play-now proposal may be posted while more than 3 s remain (before 15).
+  const WAIT = { approved: 40, declined: 60 };
+  const ticks = async (op: Operator, from: number, to: number) => { for (let t = from; t <= to + 1e-9; t += 0.5) await op.tick(at(t)); };
+  const flush = () => new Promise(r => setTimeout(r, 60));
+
+  it('while a move is open a play-now proposal is posted about once a second, each deciding one second after posting, until 3 seconds before the move decides', async () => {
+    const f = fakes({ playNow: () => WAIT });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await ticks(op, 0.5, 17.5);
+    const posts = f.of('postPlayNow');
+    expect(posts.length).toBeGreaterThanOrEqual(14);
+    expect(posts.length).toBeLessThanOrEqual(15);
+    const times = posts.map(p => Date.parse(p.args[2] as string) - 1000);
+    for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeLessThanOrEqual(1500);
+    expect(Math.max(...times)).toBeLessThan(at(15).getTime());
+    expect(posts[0].args[0]).toBe('Game 1, move 1: play now?');
+    expect(posts[0].args[2]).toBe(at(1.5).toISOString()); // posted at 0.5, deadline one second later
+  });
+
+  it('never two play-now proposals open at once: the next is posted only after the previous is decided', async () => {
+    const f = fakes({ playNow: () => WAIT });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await ticks(op, 0.5, 10);
+    const seqd = f.calls.filter(c => c.name === 'postPlayNow' || c.name === 'declineProposal').map(c => c.name);
+    for (let i = 1; i < seqd.length; i++) expect(seqd[i]).not.toBe(seqd[i - 1]);
+    expect(seqd[0]).toBe('postPlayNow');
+  });
+
+  it('it is approved only when the approved world is priced strictly above the declined world', async () => {
+    const f = fakes({ playNow: () => ({ approved: 55.000001, declined: 55 }), prices: () => ({ e2e4: { price: 52, lead: 0, marketId: 'm1' } }) });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(0.5));
+    await op.tick(at(1.5));
+    expect(f.of('approveProposal')).toEqual([{ name: 'approveProposal', args: ['p2'] }]);
+  });
+
+  for (const [name, o] of [
+    ['a tie', { playNow: () => ({ approved: 55, declined: 55 }) }],
+    ['a missing price', { playNow: () => ({ approved: 70, declined: null }) }],
+    ['a failed read', { failPlayNowRead: true, playNow: () => ({ approved: 70, declined: 10 }) }],
+    ['a refused approval', { failPlayNowApprove: true, playNow: () => ({ approved: 70, declined: 10 }) }],
+  ] as const) {
+    it(`${name} declines it with refund and the move keeps waiting for its own deadline`, async () => {
+      const f = fakes({ ...o, prices: () => ({ e2e4: { price: 52, lead: 0, marketId: 'm1' } }) });
+      const op = operator(f);
+      await op.onGameFull(full('white'), T0);
+      await op.tick(at(0.5));
+      await op.tick(at(1.5));
+      expect(f.of('declineProposal')[0]).toEqual({ name: 'declineProposal', args: ['p2'] });
+      expect(f.of('move')).toHaveLength(0);
+      expect(f.of('approveOption')).toHaveLength(0);
+      await op.tick(at(18));
+      expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'e2e4'] }]);
+      expect(op.recentDecisions[0].early).toBeFalsy();
+    });
+  }
+
+  it('an approval decides the move proposal at once by its own rule, plays the move, and posts no further play-now for that move', async () => {
+    const f = fakes({
+      playNow: () => ({ approved: 60, declined: 50 }),
+      prices: () => ({ e2e4: { price: 52, lead: -3, marketId: 'm1' }, d2d4: { price: 55, lead: 3, marketId: 'm2' } }),
+    });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(0.5));
+    await op.tick(at(1.5));
+    expect(f.of('approveProposal')).toEqual([{ name: 'approveProposal', args: ['p2'] }]);
+    expect(f.of('approveOption')).toEqual([{ name: 'approveOption', args: ['p1', 'd2d4'] }]);
+    expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'd2d4'] }]);
+    expect(f.names().indexOf('approveProposal')).toBeLessThan(f.names().indexOf('approveOption'));
+    expect(op.recentDecisions[0]).toMatchObject({ chosen: 'd2d4', kind: 'market', price: 55, tied: 1, early: true });
+    await ticks(op, 2, 6);
+    expect(f.of('postPlayNow')).toHaveLength(1);
+    expect(f.of('declineProposal')).toHaveLength(0);
+    expect(op.publicState(at(6)).open).toBeNull();
+  });
+
+  it('an approval with a tie at the top of the move plays one of the tied, at random', async () => {
+    const f = fakes({
+      playNow: () => ({ approved: 60, declined: 50 }),
+      prices: () => ({ a2a3: { price: 50, lead: 0, marketId: 'x' }, h2h4: { price: 50, lead: 0, marketId: 'y' } }),
+    });
+    const op = operator(f, seq(0.9));
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(0.5));
+    await op.tick(at(1.5));
+    expect(f.of('move')[0].args[1]).toBe('h2h4');
+    expect(op.recentDecisions[0]).toMatchObject({ tied: 2, early: true });
+  });
+
+  it('while nothing is approved the move decides at its own deadline, not early', async () => {
+    const f = fakes({ playNow: () => WAIT, prices: () => ({ e2e4: { price: 52, lead: 0, marketId: 'm1' } }) });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await ticks(op, 0.5, 17.5);
+    expect(f.of('move')).toHaveLength(0);
+    await op.tick(at(18));
+    expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'e2e4'] }]);
+    expect(op.recentDecisions[0].early).toBeFalsy();
+  });
+
+  it('the move deciding at its deadline declines a play-now proposal still open, after the move', async () => {
+    const f = fakes({ playNow: () => WAIT, prices: () => ({ e2e4: { price: 52, lead: 0, marketId: 'm1' } }) });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(14.5)); // posts, deadline 15.5
+    await op.tick(at(18)); // the move's decision comes first
+    expect(f.of('move')).toHaveLength(1);
+    const last = f.of('declineProposal').at(-1)!;
+    expect(last.args[0]).toBe('p2');
+    expect(f.names().lastIndexOf('declineProposal')).toBeGreaterThan(f.names().indexOf('move'));
+  });
+
+  it('no play-now proposal on their move, under the clock guard, for a forced move, or after the game ends', async () => {
+    const black = fakes({ playNow: () => WAIT });
+    const op1 = operator(black);
+    await op1.onGameFull(full('black'), T0);
+    await ticks(op1, 0.5, 5);
+    expect(black.of('postPlayNow')).toHaveLength(0);
+
+    const guard = fakes({ playNow: () => WAIT });
+    const op2 = operator(guard, seq(0));
+    await op2.onGameFull(full('black'), T0);
+    await op2.onGameState(st('e2e4', { btime: 25_000 }), at(3));
+    await ticks(op2, 3.5, 8);
+    expect(guard.of('postPlayNow')).toHaveLength(0);
+
+    const forced = fakes({ playNow: () => WAIT });
+    const op3 = operator(forced);
+    await op3.onGameFull(full('black', { state: st('e2e4 f7f6 d1h5') }), T0);
+    await ticks(op3, 0.5, 5);
+    expect(forced.of('postPlayNow')).toHaveLength(0);
+
+    const ended = fakes({ playNow: () => WAIT });
+    const op4 = operator(ended);
+    await op4.onGameFull(full('white'), T0);
+    await op4.tick(at(0.5));
+    await op4.onGameState(st('', { status: 'aborted' }), at(1));
+    expect(ended.of('declineProposal').map(c => c.args[0]).sort()).toEqual(['p1', 'p2']);
+    await ticks(op4, 1.5, 8);
+    expect(ended.of('postPlayNow')).toHaveLength(1);
+  });
+
+  it('/state carries the open play-now proposal with both worlds as the workspace reported them, and null once decided', async () => {
+    const f = fakes({ playNow: () => ({ approved: Number.NaN, declined: 60 }) });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    expect(op.publicState(at(0.2)).open?.playNow).toBeNull();
+    await op.tick(at(0.5));
+    expect(op.publicState(at(0.6)).open?.playNow).toEqual({
+      proposal: { id: 'p2', number: 2, url: 'https://telarchy.com/beta/chess/p/2' },
+      deadline: at(1.5).toISOString(),
+      tradeable: true,
+      approved: { price: null, marketId: 'a2' },
+      declined: { price: 60, marketId: 'd2' },
+    });
+    expect(op.publicState(at(1.6)).open?.playNow?.tradeable).toBe(false);
+    await ticks(op, 1.5, 15.5);
+    expect(op.publicState(at(15.6)).open?.playNow).toBeNull();
+  });
+
+  it('a restart declines a play-now proposal left open', async () => {
+    const f = fakes({ playNow: () => WAIT });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(0.5));
+    const saved = JSON.parse(JSON.stringify(op.toJSON()));
+    const g = fakes();
+    const back = Operator.fromJSON(g.telarchy, g.lichess, seq(0), { username: ME, seek: true, workspaceId: 'ws-chess' }, saved);
+    await back.resume(at(30));
+    expect(g.of('declineProposal').map(c => c.args[0]).sort()).toEqual(['p1', 'p2']);
+    expect(back.publicState(at(30)).open).toBeNull();
+  });
+
+  it('a slow post never lets two play-now proposals overlap and never delays the move past its decision; the late one is declined', async () => {
+    const f = fakes({ hangPlayNowPost: true, playNow: () => WAIT, prices: () => ({ e2e4: { price: 52, lead: 0, marketId: 'm1' } }) });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(0.5)); // hangs past its bound
+    await ticks(op, 1.5, 6);
+    expect(f.of('postPlayNow')).toHaveLength(1);
+    await op.tick(at(18));
+    expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'e2e4'] }]);
+    f.release();
+    await flush();
+    expect(f.of('declineProposal').map(c => c.args[0])).toContain('p2');
+  });
+
+  it('a slow read is bounded and declines, and the next play-now follows', async () => {
+    const f = fakes({ hangPlayNowRead: true, playNow: () => WAIT });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(0.5)); // post; the read right after it hangs past its bound
+    await op.tick(at(1.5)); // decides on a fresh read
+    await op.tick(at(2.5));
+    expect(f.of('declineProposal')[0].args[0]).toBe('p2');
+    expect(f.of('postPlayNow').length).toBeGreaterThanOrEqual(2);
   });
 });

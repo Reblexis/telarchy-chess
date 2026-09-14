@@ -22,6 +22,11 @@ import {
 
 export interface ProposalRef { id: string; number: number; url: string }
 export type Prices = Record<string, { price: number | null; lead: number | null; marketId?: string }>;
+/** docs/chess.md "Play now?": the two worlds of a play-now proposal as the workspace reports them. */
+export interface PlayNowWorlds {
+  approved: { price: number | null; marketId: string | null };
+  declined: { price: number | null; marketId: string | null };
+}
 
 /** The Telarchy calls the operator makes. Deliberately no trade method:
  *  docs/chess.md, "The operator account never trades." */
@@ -32,6 +37,10 @@ export interface TelarchyClient {
   readPrices(ref: ProposalRef, cell: string | null): Promise<Prices>;
   approveOption(ref: ProposalRef, option: string): Promise<void>;
   declineProposal(ref: ProposalRef): Promise<void>;
+  /** docs/chess.md "Play now?": a two-world proposal, its books at 100 credits. */
+  postPlayNow(title: string, description: string, decideBy: Date): Promise<ProposalRef>;
+  readPlayNow(ref: ProposalRef, cell: string | null): Promise<PlayNowWorlds>;
+  approveProposal(ref: ProposalRef): Promise<void>;
   postReading(value: number, at: Date): Promise<void>;
   settleMetric(value: number, at: Date, reason: string): Promise<void>;
 }
@@ -64,12 +73,16 @@ export interface OperatorOptions {
   workspaceId: string;
   /** The Telarchy API base a bot trades on, published in /state. */
   tradeBase?: string;
+  /** The bound on each play-now call (docs/chess.md "Play now?"); tests shorten it. */
+  playNowCallMs?: number;
 }
 
 export type DecisionKind = 'market' | 'undecided' | 'forced' | 'clock';
 export interface DecisionRecord {
   game: number; move: number; at: string; chosen: string; san: string;
   price: number | null; tied: number; kind: DecisionKind; undecidedReason: string | null;
+  /** Played before the window ended, because a play-now proposal was approved. */
+  early?: boolean;
 }
 
 interface Player { id?: string; name?: string; title?: string | null; rating?: number }
@@ -97,7 +110,11 @@ interface OpenMove {
   proposal: ProposalRef; options: MoveOption[];
   openedAt: string; decideAt: string; deadline: string;
   quotes: Prices | null; quotesAt: string | null;
+  /** The open play-now proposal of this move, if any (absent in older state files). */
+  playNow?: OpenPlayNow | null;
 }
+
+interface OpenPlayNow { proposal: ProposalRef; postedAt: string; deadline: string; worlds: PlayNowWorlds | null }
 
 export interface Ply {
   ply: number; at: string; by: 'us' | 'them'; uci: string; san: string; fen: string;
@@ -107,7 +124,10 @@ export interface Ply {
 interface Settlement { value: 100 | 50 | 0; reason: string; at: string; nextTryAt: number }
 
 const RULE =
-  'On my turn one proposal offers every legal move as an option, each priced by its own book on this game\'s score (100 a win, 50 a draw, 0 a loss). Two seconds before the deadline the option with the highest price is played; a tie is random among the tied, and no price at all plays a random legal move.';
+  'On my turn one proposal offers every legal move as an option, each priced by its own book on this game\'s score (100 a win, 50 a draw, 0 a loss). Two seconds before the deadline the option with the highest price is played; a tie is random among the tied, and no price at all plays a random legal move. Every second a play-now proposal asks whether to play now: approved when its approved world is priced above its declined world, and then the option priced highest is played at once.';
+
+/** docs/chess.md "Play now?". The longest a move waits is its window (rules.ts WINDOW.max). */
+const PLAY_NOW = { everyMs: 1000, deadlineMs: 1000, stopBeforeDecisionMs: 3000, callMs: 1000 } as const;
 
 const POLL_EVERY_MS = 5_000;
 const POLL_TIMEOUT_MS = 10_000;
@@ -153,6 +173,9 @@ export class Operator {
   private recentOpponents: string[] = [];
   private acceptedAt = 0;
   private busyTick = false;
+  /** A play-now post has not answered yet: nothing new is posted until it has. */
+  private playNowPosting = false;
+  private lastPlayNowAt = 0;
 
   constructor(
     private telarchy: TelarchyClient,
@@ -162,6 +185,7 @@ export class Operator {
   ) {}
 
   private get me(): string { return this.opts.username.toLowerCase(); }
+  private get callMs(): number { return this.opts.playNowCallMs ?? PLAY_NOW.callMs; }
   private running(): boolean { return !!this.game && !this.game.endedAt; }
 
   // ---- challenges -------------------------------------------------------
@@ -276,7 +300,7 @@ export class Operator {
       `I play ${g.color} against ${opp}, move ${move}. Their last move: ${last}. ` +
       `Clocks: white ${mmss(g.clocks.white)}, black ${mmss(g.clocks.black)}. Position: ${fenAfter(g.moves)}. ` +
       `Game: https://lichess.org/${g.id}. Each option is priced on my score in this game (100 a win, 50 a draw, 0 a loss); ` +
-      `the option priced highest two seconds before the deadline is played, a tie is random, no price plays a random legal move.`
+      `the option priced highest two seconds before the deadline is played, or at once when a play-now proposal is approved; a tie is random, no price plays a random legal move.`
     );
   }
 
@@ -286,7 +310,7 @@ export class Operator {
 
   private async play(
     option: MoveOption,
-    d: { kind: DecisionKind; price: number | null; tied: number; reason: string | null },
+    d: { kind: DecisionKind; price: number | null; tied: number; reason: string | null; early?: boolean },
     move: number,
     now: Date,
   ): Promise<void> {
@@ -296,6 +320,7 @@ export class Operator {
     this.recentDecisions.unshift({
       game: g.number, move, at: now.toISOString(), chosen: option.id, san: option.label,
       price: d.price, tied: d.tied, kind: d.kind, undecidedReason: d.reason,
+      ...(d.early ? { early: true } : {}),
     });
     this.recentDecisions.length = Math.min(this.recentDecisions.length, RECENT_DECISIONS);
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -347,7 +372,10 @@ export class Operator {
       const t = now.getTime();
       if (this.open) {
         if (t >= Date.parse(this.open.decideAt)) await this.close(now);
-        else if (t - this.lastPollAt >= POLL_EVERY_MS) await this.poll(now);
+        else {
+          if (t - this.lastPollAt >= POLL_EVERY_MS) await this.poll(now);
+          if (this.open) await this.playNowStep(now);
+        }
       }
       if (this.claimAt !== null && t >= this.claimAt) await this.claim();
       if (t - this.accountAt >= 60_000) await this.readAccount(now);
@@ -374,7 +402,99 @@ export class Operator {
     }
   }
 
-  private async close(now: Date): Promise<void> {
+  // ---- play now? -------------------------------------------------------
+
+  /** docs/chess.md "Play now?": decide the open play-now proposal at its
+   *  deadline, then post the next one while more than 3 s remain. */
+  private async playNowStep(now: Date): Promise<void> {
+    const open = this.open!;
+    const t = now.getTime();
+    if (open.playNow) {
+      if (t < Date.parse(open.playNow.deadline)) return;
+      await this.decidePlayNow(now);
+      if (this.open !== open) return; // approved: the move is played
+    }
+    if (this.playNowPosting) return;
+    if (Date.parse(open.decideAt) - t <= PLAY_NOW.stopBeforeDecisionMs) return;
+    if (t - this.lastPlayNowAt < PLAY_NOW.everyMs) return;
+    await this.postPlayNow(now);
+  }
+
+  private async postPlayNow(now: Date): Promise<void> {
+    const open = this.open!;
+    const g = this.game!;
+    this.lastPlayNowAt = now.getTime();
+    const deadline = new Date(now.getTime() + PLAY_NOW.deadlineMs);
+    const title = `${proposalTitle(g.number, open.move)}: play now?`;
+    const description =
+      `Approve to play move ${open.move} of game ${g.number} now: the option priced highest on proposal #${open.proposal.number} is played at once. ` +
+      `It is approved when the approved world is priced strictly above the declined world at its deadline, one second after posting; otherwise the move waits.`;
+    this.playNowPosting = true;
+    const call = this.telarchy.postPlayNow(title, description, deadline);
+    let ref: ProposalRef;
+    try {
+      ref = await within(call, this.callMs);
+    } catch (e) {
+      // A post past its bound may still land: decline it when it does, and post nothing new until it has answered.
+      call.then(late => { this.playNowPosting = false; return this.decline(late); }, () => { this.playNowPosting = false; });
+      console.error(`play now post: ${(e as Error).message}`);
+      return;
+    }
+    this.playNowPosting = false;
+    if (this.open !== open) return this.decline(ref);
+    const pn: OpenPlayNow = { proposal: ref, postedAt: now.toISOString(), deadline: deadline.toISOString(), worlds: null };
+    open.playNow = pn;
+    // Read at once, so both worlds' market ids are on /state within the second.
+    try {
+      const worlds = await within(this.telarchy.readPlayNow(ref, g.cell), this.callMs);
+      if (open.playNow === pn) pn.worlds = worlds;
+    } catch {
+      // the decision reads again at the deadline
+    }
+  }
+
+  private async decidePlayNow(now: Date): Promise<void> {
+    const open = this.open!;
+    const pn = open.playNow!;
+    let worlds: PlayNowWorlds | null = null;
+    try {
+      worlds = await within(this.telarchy.readPlayNow(pn.proposal, this.game?.cell ?? null), this.callMs);
+      pn.worlds = worlds;
+    } catch {
+      // unreadable: declined
+    }
+    open.playNow = null;
+    const a = finite(worlds?.approved.price);
+    const d = finite(worlds?.declined.price);
+    if (a !== null && d !== null && a > d) {
+      try {
+        await within(this.telarchy.approveProposal(pn.proposal), this.callMs);
+      } catch (e) {
+        console.error(`play now approve ${pn.proposal.id}: ${(e as Error).message}`);
+        return this.declineWithin(pn.proposal);
+      }
+      if (this.open !== open) return;
+      return this.close(now, true);
+    }
+    return this.declineWithin(pn.proposal);
+  }
+
+  private async declineWithin(ref: ProposalRef): Promise<void> {
+    try { await within(this.telarchy.declineProposal(ref), this.callMs); } catch (e) { console.error(`decline ${ref.id}: ${(e as Error).message}`); }
+  }
+
+  // ---- the decision -----------------------------------------------------
+
+  /** The move decides by its own rule; a play-now proposal still open is
+   *  declined after the move, so it never delays it. */
+  private async close(now: Date, early = false): Promise<void> {
+    const pn = this.open?.playNow ?? null;
+    if (this.open) this.open.playNow = null;
+    await this.closeMove(now, early);
+    if (pn) await this.declineWithin(pn.proposal);
+  }
+
+  private async closeMove(now: Date, early: boolean): Promise<void> {
     const open = this.open!;
     let quotes: Prices = open.quotes ?? {};
     try {
@@ -390,7 +510,7 @@ export class Operator {
     if (d.kind === 'market') {
       try {
         await this.telarchy.approveOption(open.proposal, d.chosen);
-        return this.play(byId(d.chosen), { kind: 'market', price: quotes[d.chosen]?.price ?? null, tied: d.tied, reason: null }, open.move, now);
+        return this.play(byId(d.chosen), { kind: 'market', price: quotes[d.chosen]?.price ?? null, tied: d.tied, reason: null, early }, open.move, now);
       } catch (e) {
         await this.decline(open.proposal);
         return this.play(this.randomOf(open.options), { kind: 'undecided', price: null, tied: 0, reason: `approve of ${d.chosen} failed: ${(e as Error).message}` }, open.move, now);
@@ -413,9 +533,10 @@ export class Operator {
     g.result = scoreOf({ status: g.status, winner: g.winner }, g.color);
     this.syncSummary();
     if (this.open) {
-      const ref = this.open.proposal;
+      const { proposal, playNow } = this.open;
       this.open = null;
-      await this.decline(ref);
+      await this.decline(proposal);
+      if (playNow) await this.decline(playNow.proposal);
     }
     if (g.result === null) {
       this.idleSince = now.getTime();
@@ -492,9 +613,10 @@ export class Operator {
    *  with refund; the event stream then replays the game and a fresh one is posted. */
   async resume(_now: Date): Promise<void> {
     if (!this.open) return;
-    const ref = this.open.proposal;
+    const { proposal, playNow } = this.open;
     this.open = null;
-    await this.decline(ref);
+    await this.decline(proposal);
+    if (playNow) await this.decline(playNow.proposal);
   }
 
   toJSON() {
@@ -557,6 +679,15 @@ export class Operator {
           }
           return { id: o.id, san: o.label, price: null, lead: null, marketId: q?.marketId ?? null, reason: 'no price' };
         }),
+        playNow: open.playNow
+          ? {
+              proposal: open.playNow.proposal,
+              deadline: open.playNow.deadline,
+              tradeable: now.getTime() < Date.parse(open.playNow.deadline),
+              approved: { price: finite(open.playNow.worlds?.approved.price), marketId: open.playNow.worlds?.approved.marketId ?? null },
+              declined: { price: finite(open.playNow.worlds?.declined.price), marketId: open.playNow.worlds?.declined.marketId ?? null },
+            }
+          : null,
       },
       cell: g?.cell ?? null,
       cellEndsAt: g ? new Date(Date.parse(`${g.cell}:00Z`) + 60_000).toISOString() : null,
@@ -591,4 +722,8 @@ function legalSanOfLast(moves: string[]): string {
 
 function safeFen(moves: string[]): string | null {
   try { return fenAfter(moves); } catch { return null; }
+}
+
+function finite(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }

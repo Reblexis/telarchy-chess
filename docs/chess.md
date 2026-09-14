@@ -142,7 +142,8 @@ When Lichess says it is TelarchyBot's turn:
   every 5 seconds, publishing each option's price, lead and market id. The
   floor draws the live prices from Telarchy's own once-a-second prices read,
   not from these.
-- **Two seconds before the deadline** it reads once more and decides. An
+- **Two seconds before the deadline**, unless a play-now proposal was
+  approved first (below), it reads once more and decides. An
   option's score is its **price**, the consensus of its own book:
   - the option with the highest price is **chosen**: the operator approves
     the proposal naming it (`POST /api/proposals/:id/approve { option }`),
@@ -185,8 +186,17 @@ waits and the move is made after one minute at the latest"; chess only).
 - **Approved means now.** The move proposal is decided at once by its own
   rule (the option priced highest, a tie random) and the move is played;
   no further play-now proposal is posted for that move.
-- **Otherwise nothing changes.** The move proposal still decides at its own
-  deadline, within the minute at the latest, as before.
+- **Otherwise nothing changes.** The move proposal still decides two
+  seconds before its own deadline, so the longest a move waits is its
+  window (above, at most 50 seconds), as before.
+- **Read at once, bounded.** The operator reads a play-now proposal right
+  after posting it, so both worlds' market ids are on `/state` within the
+  second, and again at its deadline to decide. Each play-now call (post,
+  read, approve, decline) is bounded at 1 second. A post that has not
+  answered posts nothing new until it does, and a proposal it created late
+  is declined. The move's own decision never waits for a play-now call: a
+  play-now proposal still open when the move decides is declined after the
+  move is played.
 - **Liquidity.** Each play-now book holds **100 credits**, from the owner
   (the move proposal's option books keep 1,000), and both void and refund
   at the decision except the approved world's, which settles with the
@@ -278,6 +288,9 @@ decisions and settlement included. Production follows on Viktor's word.
   recorded with its kind and reason.
 - One proposal per turn, never two open at once, and its options are
   exactly the legal moves of the position.
+- At most one play-now proposal open at a time; a move is played before its
+  window ends only after its play-now proposal was approved, which happens
+  only when the approved world is priced strictly above the declined.
 - The option with the highest price is chosen; a tie is random among the
   tied.
 - The player is in at most one game at a time, and starts or accepts none
