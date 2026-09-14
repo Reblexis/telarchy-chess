@@ -1,6 +1,6 @@
 // The operator of docs/chess.md driven with fake Telarchy and Lichess clients
 // and an explicit clock: written before the code.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Operator, type TelarchyClient, type LichessClient, type Prices } from '../src/operator.js';
 import { legalOptions, fenAfter } from '../src/rules.js';
 
@@ -376,6 +376,21 @@ describe('seeking a bot', () => {
     expect(f.of('challenge')).toHaveLength(1);
     await op.tick(at(156));
     expect(f.of('challenge')).toHaveLength(2);
+  });
+  it('Rookie searched in silence for 26 minutes (2026-09-14): an empty search is logged with the rating and the band it tried', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // A bot no step can take (its own rating is provisional), so the search is empty under any rule.
+      const f = fakes({ bots: [{ id: 'provbot', username: 'ProvBot', perfs: { classical: { rating: 1500, games: 50, prov: true } } }] });
+      const op = operator(f);
+      await op.tick(T0);
+      await op.tick(at(120));
+      expect(f.of('challenge')).toHaveLength(0);
+      const lines = errors.mock.calls.map(c => String(c[0]));
+      expect(lines.some(l => /^seek: nobody to challenge at rating \d+\??, within 400 of it, the last opponent excluded$/.test(l))).toBe(true);
+    } finally {
+      errors.mockRestore();
+    }
   });
   it('with seeking off nobody is challenged', async () => {
     const f = fakes({ bots: [bot('Alpha', 1600)] });

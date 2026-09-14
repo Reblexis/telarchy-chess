@@ -12,6 +12,7 @@ import {
   proposalTitle,
   scoreOf,
   windowSeconds,
+  SEEK_MAX_BAND,
   WINDOW,
   type ChallengeLike,
   type Color,
@@ -460,7 +461,13 @@ export class Operator {
     try {
       this.player = await this.lichess.account();
       const target = pickOpponent(await this.lichess.onlineBots(), this.player, this.recentOpponents, this.rng);
-      if (!target) { this.nextSeekAt = t + CHALLENGE_WAIT_MS; return; }
+      if (!target) {
+        // docs/chess.md "Opponents": an empty search says why, so a player that finds no games is never silent.
+        const me = this.player;
+        console.error(`seek: nobody to challenge at rating ${me.rating}${me.provisional ? '?' : ''}, within ${SEEK_MAX_BAND} of it, the last opponent excluded`);
+        this.nextSeekAt = t + CHALLENGE_WAIT_MS;
+        return;
+      }
       this.remember(target);
       const { id } = await this.lichess.challenge(target, SEEK_CLOCK);
       this.challengeOut = { id, username: target, sentAt: t };

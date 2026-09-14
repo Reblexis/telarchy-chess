@@ -70,7 +70,14 @@ challenges one bot from Lichess's online bots list (`GET /api/bot/online`):
 a bot with an established classical rating within 200 points of the
 player's own (any established rating while the player's own is
 provisional), not one of the last five opponents, picked at random among
-those. A challenge not accepted in 60 seconds is cancelled, and after a
+those. **When nobody qualifies, the rule loosens in order** (Viktor,
+2026-09-14), stopping at the first step that finds someone: first the
+last five opponents are allowed again, except the very last one, who is
+never challenged twice in a row; then the band widens by 100 points at a
+time, to 300 and then 400, still never the very last opponent. Past 400
+nobody is challenged, and every empty search is logged with the rating and
+the band it tried, so a player that is not finding games says why. A
+challenge not accepted in 60 seconds is cancelled, and after a
 decline or a cancel the next candidate is tried 30 seconds later. The
 player never challenges a human.
 
