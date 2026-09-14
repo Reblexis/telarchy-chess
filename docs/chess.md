@@ -77,8 +77,11 @@ player never challenges a human.
 ## The workspace
 
 One public Telarchy workspace named `Chess` (slug `chess`), owned by the
-operator account: the participant **`chess-operator`** (nickname `chess`,
-its owner Viktor's account), the way `snake-operator` owns the Snake. Every
+operator account: the participant **`chess-operator`** (nickname **`Rookie`**,
+the bot's name on Telarchy, where every proposal shows it as the proposer;
+its owner Viktor's account), the way `snake-operator` owns the Snake. The
+workspace keeps the name `Chess`, and the Lichess account stays
+TelarchyBot. Every
 proposal, reading and settlement on the floor is that account's; no person's
 name is on them, **muted** (`notificationsMuted` on) like the snake, with
 no charter, and closed to outside proposals (`externalProposalsDisabled`)
@@ -86,7 +89,10 @@ where the store supports it.
 
 One metric, **Game score**: TelarchyBot's result in the current game from
 its own side, **100 for a win, 50 for a draw, 0 for a loss** (an aborted
-game has no result and settles nothing). Range 0 to 100.
+game has no result and settles nothing). Range 0 to 100. Its question is
+set by the owner as the metric's `marketTitle`, verbatim: **"What score
+will I reach this game?"**, so the floor never composes one with a clock
+time in it.
 
 **One book per game.** When a game starts, the operator first posts a
 reading of 50 (no result yet), so the game's main book, and every option
