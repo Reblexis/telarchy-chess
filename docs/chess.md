@@ -164,6 +164,38 @@ re-read.
 The operator account never trades. Nothing about a move is decided by the
 operator except through this rule.
 
+## Play now?
+
+A move does not have to wait for its window to end (Viktor, 2026-09-14: "a
+new proposal ... that gets spawned every second with one second deadline,
+asking whether the next move should be made right now? defaults to
+declined, but if it is approved the move is made immediately, if not, it
+waits and the move is made after one minute at the latest"; chess only).
+
+- **One a second, one at a time.** While a move proposal is open and more
+  than 3 seconds remain before its decision, the operator posts a
+  two-branch proposal titled `Game G, move N: play now?` every second, its
+  deadline one second after posting, priced on the game's cell like every
+  book. A new one is posted only once the previous one is decided.
+- **The rule.** At its deadline the operator reads its two worlds and
+  approves it only when the approved world ("play now") is priced strictly
+  above the declined world ("wait"); a tie, an unpriced world, a failed
+  read or a refused approval declines it with refund. Declined is the
+  default.
+- **Approved means now.** The move proposal is decided at once by its own
+  rule (the option priced highest, a tie random) and the move is played;
+  no further play-now proposal is posted for that move.
+- **Otherwise nothing changes.** The move proposal still decides at its own
+  deadline, within the minute at the latest, as before.
+- **Liquidity.** Each play-now book holds the metric's proposal credits,
+  1,000 a book, from the owner, and both void and refund at the decision
+  except the approved world's, which settles with the game.
+- **On the feed.** `/state` carries `open.playNow`: `{ proposal: {id,
+  number, url}, deadline, tradeable, approved: { price, marketId },
+  declined: { price, marketId } }`, or null between them, and
+  `recentDecisions` records a move played early as `kind: "market"` with
+  `early: true`.
+
 ## The feed
 
 Public JSON, `access-control-allow-origin: *`, `cache-control: no-store`,
