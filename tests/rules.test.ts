@@ -95,8 +95,8 @@ describe('names and numbers', () => {
     expect(moveNumber(2)).toBe(2);
     expect(moveNumber(23)).toBe(12);
   });
-  it('the game\'s book is the one-minute cell 24 hours after its start', () => {
-    expect(horizonCell(new Date('2026-09-13T14:05:42Z'))).toBe('2026-09-14T14:05');
+  it('the game\'s book is open until the game ends, without a fixed time', () => {
+    expect(horizonCell(new Date('2026-09-13T14:05:42Z'))).toBe('until-settled');
   });
 });
 

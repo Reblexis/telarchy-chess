@@ -582,7 +582,7 @@ export class Operator {
         }),
       },
       cell: g?.cell ?? null,
-      cellEndsAt: g ? new Date(Date.parse(`${g.cell}:00Z`) + 60_000).toISOString() : null,
+      cellEndsAt: g && g.cell !== 'until-settled' ? new Date(Date.parse(`${g.cell}:00Z`) + 60_000).toISOString() : null,
       recentDecisions: this.recentDecisions,
       rules: {
         windowSeconds: { min: WINDOW.min, max: WINDOW.max, firstMove: WINDOW.firstMove },

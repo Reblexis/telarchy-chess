@@ -31,8 +31,8 @@ Everything below is the contract. Internals are free within it.
 
 ### Clocks
 
-Games are **real-time**; no correspondence and no unlimited games, so a
-game always ends within the day its book is priced on.
+Games are **real-time**; no correspondence and no unlimited games.
+The book has no calendar deadline: the game result triggers settlement.
 
 - **Games the player starts** are **30 minutes plus 20 seconds, rated**,
   colour random. 20 seconds is the largest increment the default
@@ -104,11 +104,13 @@ time in it.
 **One book per game.** When a game starts, the operator first posts a
 reading of 50 (no result yet), so the game's main book, and every option
 book anchored to it, opens at the middle and never at the last game's
-result. Then it sets the metric's only horizon to the absolute one-minute
-cell 24 hours after the game's
-start (`customHorizons: ["YYYY-MM-DDTHH:MM"]`) and forces the workspace's
-market refresh, which opens that cell's main book. Every proposal of the
-game is priced on that cell.
+result. Then it sets the metric's only horizon to `until-settled`, with
+`horizonTitles: { "until-settled": "when the game ends" }`, and forces the
+workspace's market refresh. Every proposal of the game is priced on that
+book. In date customization this is "When I settle it" with a custom title;
+the operator performs that settlement automatically at game end. A running
+game restored from an older calendar configuration finishes on its original
+book; the next game adopts the new horizon.
 
 **The end settles it, before anything else starts.** The moment Lichess
 reports the game finished, the operator posts the score as the metric's
@@ -217,7 +219,8 @@ listed is present; a value not known yet is `null`.
   openedAt, decideAt, deadline, tradeable, quotesAt, options: [{ id, san,
   price, lead, marketId, reason? }] }`, options in proposal order, `reason`
   saying why a price is missing (`not polled yet` before the first poll).
-- `cell`, `cellEndsAt`: the game's book.
+- `cell`, `cellEndsAt`: the game's book. `cell` is `until-settled` and
+  `cellEndsAt` is null for a game without a calendar deadline.
 - `recentDecisions`: the last 20, newest first, `{ game, move, at, chosen,
   san, price, tied, kind: "market" | "undecided" | "forced" | "clock",
   undecidedReason }`.
