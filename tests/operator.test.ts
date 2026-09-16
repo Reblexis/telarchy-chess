@@ -122,7 +122,7 @@ describe('a game opens its book', () => {
   it('the start sets the metric horizon to the cell 24 hours out and refreshes the books', async () => {
     const f = fakes();
     await operator(f).onGameFull(full('black'), T0);
-    expect(f.of('setHorizon')).toEqual([{ name: 'setHorizon', args: ['2026-09-14T14:00'] }]);
+    expect(f.of('setHorizon')).toEqual([{ name: 'setHorizon', args: ['until-settled'] }]);
     expect(f.names().indexOf('refreshBooks')).toBeGreaterThan(f.names().indexOf('setHorizon'));
   });
 });
@@ -439,7 +439,8 @@ describe('the feed', () => {
     expect(s.open?.options.find(o => o.id === 'e2e4')).toMatchObject({ san: 'e4', price: 55, lead: 2, marketId: 'm-e2e4' });
     expect(s.open?.options.find(o => o.id === 'a2a3')).toMatchObject({ price: null, reason: 'no price' });
     expect(s.game).toMatchObject({ number: 1, id: 'g1', url: 'https://lichess.org/g1', color: 'white', opponent: { name: 'OppBot', rating: 1520 } });
-    expect(s.cell).toBe('2026-09-14T14:00');
+    expect(s.cell).toBe('until-settled');
+    expect(s.cellEndsAt).toBeNull();
     expect(s.trade).toMatchObject({ endpoint: 'POST /api/predictions/trade', workspaceId: 'ws-chess', rangeMin: 0, rangeMax: 100 });
     expect(s.rules.windowSeconds).toEqual({ min: 15, max: 50, firstMove: 20 });
   });

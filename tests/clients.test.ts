@@ -32,6 +32,23 @@ const CELL = '2026-09-14T14:00';
 describe('the Telarchy client', () => {
   const base = { baseUrl: 'https://telarchy.com/beta/api', workspaceId: 'ws1', metricId: 'm1', workspaceUrl: 'https://telarchy.com/beta/chess' };
 
+  it('reads game-end prices from the no-deadline response even without a targetDate', async () => {
+    const { f } = fakeFetch(() => ({ body: { markets: [
+      { resolvesOn: '2026-09-14T14:01:00.000Z', options: [{ id: 'e2e4', consensus: 1, marketId: 'wrong' }] },
+      { resolvesOn: '9999-12-31T00:00:00Z', options: [{ id: 'e2e4', consensus: 55, marketId: 'right' }] },
+    ] } }));
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k1' }, f);
+    expect(await c.readPrices({ id: 'p1', number: 1, url: '' }, 'until-settled')).toMatchObject({ e2e4: { price: 55, marketId: 'right' } });
+  });
+  it('names the game-end horizon without a calendar deadline', async () => {
+    const { f, reqs } = fakeFetch(() => ({ body: {} }));
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k1' }, f);
+    await c.setHorizon('until-settled');
+    expect(JSON.parse(reqs[0].body!).timePreference).toMatchObject({
+      customHorizons: ['until-settled'],
+      horizonTitles: { 'until-settled': 'when the game ends' },
+    });
+  });
   it('an agent key goes in X-Agent-Key with the workspace header', async () => {
     const { f, reqs } = fakeFetch(() => ({ status: 201, body: { id: 'p9', number: 9 } }));
     const c = new HttpTelarchyClient({ ...base, apiKey: 'k1' }, f);

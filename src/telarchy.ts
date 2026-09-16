@@ -115,7 +115,7 @@ export class HttpTelarchyClient implements TelarchyClient {
     const withOptions = rows.filter(x => Array.isArray(x?.options));
     let row: any;
     if (cell) {
-      const end = Date.parse(`${cell}:00Z`) + 60_000;
+      const end = cell === 'until-settled' ? Date.parse('9999-12-31T00:00:00Z') : Date.parse(`${cell}:00Z`) + 60_000;
       row = withOptions.find(x => x.targetDate === cell) ??
         withOptions.find(x => !x.targetDate && typeof x.resolvesOn === 'string' && Date.parse(x.resolvesOn) === end);
     } else {
@@ -143,6 +143,7 @@ export class HttpTelarchyClient implements TelarchyClient {
       timePreference: {
         enabled: false,
         customHorizons: [cell],
+        ...(cell === 'until-settled' ? { horizonTitles: { [cell]: 'when the game ends' } } : {}),
         horizonCredits: { [cell]: { book: MAIN_BOOK_CREDITS, proposal: OPTION_BOOK_CREDITS } },
       },
     });

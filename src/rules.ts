@@ -82,9 +82,9 @@ export function moveNumber(plies: number): number {
   return Math.floor(plies / 2) + 1;
 }
 
-/** docs/chess.md "The workspace": the one-minute cell 24 hours after the game's start. */
-export function horizonCell(startedAt: Date): string {
-  return new Date(startedAt.getTime() + 24 * 3600_000).toISOString().slice(0, 16);
+/** docs/chess.md "The workspace": the game ends the book, never a clock. */
+export function horizonCell(_startedAt: Date): string {
+  return 'until-settled';
 }
 
 /** Lichess statuses that end a game with a result. */
