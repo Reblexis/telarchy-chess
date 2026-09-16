@@ -117,6 +117,8 @@ const SETTLE_RETRY_MS = 60_000;
 const SEEK_IDLE_MS = 120_000;
 const CHALLENGE_WAIT_MS = 60_000;
 const SEEK_GAP_MS = 30_000;
+/** docs/chess.md "The search pauses": one probe a minute while paused. */
+const PROBE_EVERY_MS = 60_000;
 const SEEK_CLOCK = { limit: 1800, increment: 20, rated: true };
 const RECENT_DECISIONS = 20;
 const RECENT_OPPONENTS = 5;
@@ -155,6 +157,11 @@ export class Operator {
   private recentOpponents: string[] = [];
   private acceptedAt = 0;
   private busyTick = false;
+  /** docs/chess.md "The search pauses while the platform cannot price a
+   *  game": set by a move that went undecided for a platform reason, cleared
+   *  by a priced move or a probe that succeeds. */
+  paused: { since: string; reason: string } | null = null;
+  private probeAt = 0;
 
   constructor(
     private telarchy: TelarchyClient,
@@ -170,7 +177,7 @@ export class Operator {
 
   async onChallenge(ch: ChallengeLike & { id: string; challenger?: { id?: string } }, now: Date): Promise<void> {
     if (ch.challenger?.id?.toLowerCase() === this.me) return; // our own outgoing challenge, echoed
-    const busy = this.pendingDeclines.length > 0 || this.running() || !!this.settlement || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
+    const busy = this.pendingDeclines.length > 0 || this.running() || !!this.settlement || !!this.paused || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
     const v = challengeVerdict(ch, { busy });
     try {
       if (v.accept) {
@@ -300,6 +307,11 @@ export class Operator {
       price: d.price, tied: d.tied, kind: d.kind, undecidedReason: d.reason,
     });
     this.recentDecisions.length = Math.min(this.recentDecisions.length, RECENT_DECISIONS);
+    // The platform's word on itself (docs/chess.md, "The search pauses"):
+    // a priced move clears the mark, an undecided one sets it. The clock
+    // guard and a forced move say nothing about the platform.
+    if (d.kind === 'market') this.paused = null;
+    else if (d.kind === 'undecided' && !this.paused) { this.paused = { since: now.toISOString(), reason: d.reason ?? 'undecided' }; this.probeAt = now.getTime(); }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         await within(this.lichess.move(g.id, option.id), 10_000);
@@ -356,6 +368,7 @@ export class Operator {
       if (this.claimAt !== null && t >= this.claimAt) await this.claim();
       if (t - this.accountAt >= 60_000) await this.readAccount(now);
       if (this.settlement && t >= this.settlement.nextTryAt) await this.trySettle(now);
+      if (this.paused && !this.running() && t - this.probeAt >= PROBE_EVERY_MS) await this.probe(now);
       await this.seek(now);
     } finally {
       this.busyTick = false;
@@ -460,7 +473,7 @@ export class Operator {
   // ---- seeking ----------------------------------------------------------
 
   private async seek(now: Date): Promise<void> {
-    if (this.pendingDeclines.length || !this.opts.seek || this.running() || this.settlement || this.open) return;
+    if (this.pendingDeclines.length || !this.opts.seek || this.running() || this.settlement || this.paused || this.open) return;
     const t = now.getTime();
     if (this.idleSince === null) this.idleSince = t;
     if (this.challengeOut) {
@@ -489,6 +502,19 @@ export class Operator {
     } catch (e) {
       this.nextSeekAt = t + CHALLENGE_WAIT_MS;
       console.error(`seek: ${(e as Error).message}`);
+    }
+  }
+
+  /** docs/chess.md "The search pauses": once a minute while paused, the
+   *  refresh call a move needs; success clears the mark, failure is logged. */
+  private async probe(now: Date): Promise<void> {
+    this.probeAt = now.getTime();
+    try {
+      await within(this.telarchy.refreshBooks(), 20_000);
+      console.error(`probe: platform answers again, the search resumes (paused since ${this.paused?.since})`);
+      this.paused = null;
+    } catch (e) {
+      console.error(`probe: platform still down since ${this.paused?.since}: ${(e as Error).message}`);
     }
   }
 
@@ -523,7 +549,7 @@ export class Operator {
     return {
       game: this.game, open: this.open, recentDecisions: this.recentDecisions, games: this.games,
       settlement: this.settlement, playedPly: this.playedPly, recentOpponents: this.recentOpponents,
-      plies: this.plies, pendingDeclines: this.pendingDeclines,
+      plies: this.plies, pendingDeclines: this.pendingDeclines, paused: this.paused,
     };
   }
 
@@ -538,6 +564,7 @@ export class Operator {
     op.recentOpponents = raw.recentOpponents ?? [];
     op.plies = raw.plies ?? {};
     op.pendingDeclines = raw.pendingDeclines ?? [];
+    op.paused = raw.paused ?? null;
     return op;
   }
 
@@ -557,10 +584,12 @@ export class Operator {
   publicState(now: Date) {
     const g = this.game;
     const open = this.open;
-    const phase = open ? 'our-move' : this.running() ? 'their-move' : this.settlement ? 'settling' : 'seeking';
+    const phase = open ? 'our-move' : this.running() ? 'their-move' : this.settlement ? 'settling' : this.paused ? 'paused' : 'seeking';
     return {
       schema: 1,
       phase,
+      // docs/chess.md "The search pauses": why no game is sought, or null.
+      paused: this.paused,
       player: this.player,
       game: g && {
         number: g.number, id: g.id, url: `https://lichess.org/${g.id}`, color: g.color, opponent: g.opponent,
