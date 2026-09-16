@@ -198,3 +198,16 @@ describe('ndjson streams', () => {
     expect(out).toEqual([{ type: 'gameStart', game: { id: 'g1' } }, { type: 'gameFinish' }]);
   });
 });
+
+
+describe('closure retries stop only when the proposal is known closed', () => {
+  const base = { baseUrl: 'https://telarchy.com/beta/api', workspaceId: 'ws', metricId: 'm', workspaceUrl: '' };
+  it.each(['approved', 'declined', 'lapsed', 'withdrawn', 'declined_spam'])('accepts an already %s proposal without another decision', async status => {
+    const { f } = fakeFetch(() => ({ status: 409, body: { code: 'not_pending', status } }));
+    await expect(new HttpTelarchyClient({ ...base, apiKey: 'k' }, f).declineProposal({ id: 'p1', number: 1, url: '' })).resolves.toBeUndefined();
+  });
+  it.each([404, 500, 401, 409])('keeps an unconfirmed %s failure retryable', async status => {
+    const { f } = fakeFetch(() => ({ status, body: { error: 'failed' } }));
+    await expect(new HttpTelarchyClient({ ...base, apiKey: 'k' }, f).declineProposal({ id: 'p1', number: 1, url: '' })).rejects.toThrow();
+  });
+});

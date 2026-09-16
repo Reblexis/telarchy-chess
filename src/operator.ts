@@ -139,6 +139,7 @@ export class Operator {
   recentDecisions: DecisionRecord[] = [];
   games: Array<Omit<GameRecord, 'moves' | 'clocks' | 'inc'> & { plies: number }> = [];
   settlement: Settlement | null = null;
+  pendingDeclines: Array<{ ref: ProposalRef; nextTryAt: number }> = [];
   /** Every game's plies by game number (docs/chess.md, "The feed", /history). */
   plies: Record<number, Ply[]> = {};
   private claimAt: number | null = null;
@@ -169,7 +170,7 @@ export class Operator {
 
   async onChallenge(ch: ChallengeLike & { id: string; challenger?: { id?: string } }, now: Date): Promise<void> {
     if (ch.challenger?.id?.toLowerCase() === this.me) return; // our own outgoing challenge, echoed
-    const busy = this.running() || !!this.settlement || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
+    const busy = this.pendingDeclines.length > 0 || this.running() || !!this.settlement || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
     const v = challengeVerdict(ch, { busy });
     try {
       if (v.accept) {
@@ -350,6 +351,8 @@ export class Operator {
         if (t >= Date.parse(this.open.decideAt)) await this.close(now);
         else if (t - this.lastPollAt >= POLL_EVERY_MS) await this.poll(now);
       }
+      const cleanup = this.pendingDeclines.find(x => t >= x.nextTryAt);
+      if (cleanup) await this.decline(cleanup.ref, now);
       if (this.claimAt !== null && t >= this.claimAt) await this.claim();
       if (t - this.accountAt >= 60_000) await this.readAccount(now);
       if (this.settlement && t >= this.settlement.nextTryAt) await this.trySettle(now);
@@ -393,16 +396,27 @@ export class Operator {
         await this.telarchy.approveOption(open.proposal, d.chosen);
         return this.play(byId(d.chosen), { kind: 'market', price: quotes[d.chosen]?.price ?? null, tied: d.tied, reason: null }, open.move, now);
       } catch (e) {
-        await this.decline(open.proposal);
+        await this.decline(open.proposal, now);
         return this.play(this.randomOf(open.options), { kind: 'undecided', price: null, tied: 0, reason: `approve of ${d.chosen} failed: ${(e as Error).message}` }, open.move, now);
       }
     }
-    await this.decline(open.proposal);
+    await this.decline(open.proposal, now);
     return this.play(byId(d.chosen), { kind: 'undecided', price: null, tied: 0, reason: d.reason }, open.move, now);
   }
 
-  private async decline(ref: ProposalRef): Promise<void> {
-    try { await this.telarchy.declineProposal(ref); } catch (e) { console.error(`decline ${ref.id}: ${(e as Error).message}`); }
+  private async decline(ref: ProposalRef, now: Date): Promise<void> {
+    let queued = this.pendingDeclines.find(x => x.ref.id === ref.id);
+    if (!queued) {
+      queued = { ref, nextTryAt: now.getTime() };
+      this.pendingDeclines.push(queued);
+    }
+    queued.nextTryAt = now.getTime() + 60_000;
+    try {
+      await this.telarchy.declineProposal(ref);
+      this.pendingDeclines = this.pendingDeclines.filter(x => x.ref.id !== ref.id);
+    } catch (e) {
+      console.error(`decline ${ref.id}, retained for retry: ${(e as Error).message}`);
+    }
   }
 
   // ---- the end ----------------------------------------------------------
@@ -416,7 +430,7 @@ export class Operator {
     if (this.open) {
       const ref = this.open.proposal;
       this.open = null;
-      await this.decline(ref);
+      await this.decline(ref, now);
     }
     if (g.result === null) {
       this.idleSince = now.getTime();
@@ -431,6 +445,7 @@ export class Operator {
   /** docs/chess.md "The end settles it": retried every minute, and nothing new
    *  starts until it has gone through. */
   private async trySettle(now: Date): Promise<void> {
+    if (this.pendingDeclines.length) return;
     const s = this.settlement!;
     try {
       await this.telarchy.settleMetric(s.value, new Date(s.at), s.reason);
@@ -445,7 +460,7 @@ export class Operator {
   // ---- seeking ----------------------------------------------------------
 
   private async seek(now: Date): Promise<void> {
-    if (!this.opts.seek || this.running() || this.settlement || this.open) return;
+    if (this.pendingDeclines.length || !this.opts.seek || this.running() || this.settlement || this.open) return;
     const t = now.getTime();
     if (this.idleSince === null) this.idleSince = t;
     if (this.challengeOut) {
@@ -497,18 +512,18 @@ export class Operator {
 
   /** docs/chess.md "Operation": a proposal left open by a restart is declined
    *  with refund; the event stream then replays the game and a fresh one is posted. */
-  async resume(_now: Date): Promise<void> {
+  async resume(now: Date): Promise<void> {
     if (!this.open) return;
     const ref = this.open.proposal;
     this.open = null;
-    await this.decline(ref);
+    await this.decline(ref, now);
   }
 
   toJSON() {
     return {
       game: this.game, open: this.open, recentDecisions: this.recentDecisions, games: this.games,
       settlement: this.settlement, playedPly: this.playedPly, recentOpponents: this.recentOpponents,
-      plies: this.plies,
+      plies: this.plies, pendingDeclines: this.pendingDeclines,
     };
   }
 
@@ -522,6 +537,7 @@ export class Operator {
     op.playedPly = raw.playedPly ?? null;
     op.recentOpponents = raw.recentOpponents ?? [];
     op.plies = raw.plies ?? {};
+    op.pendingDeclines = raw.pendingDeclines ?? [];
     return op;
   }
 

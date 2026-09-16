@@ -93,6 +93,11 @@ export class HttpTelarchyClient implements TelarchyClient {
     const text = await res.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+    // A retry may meet a proposal the deadline sweep or an earlier request
+    // already closed. Only an explicit terminal status proves cleanup done.
+    if (method === 'POST' && path.endsWith('/decline') && res.status === 409 &&
+        json?.code === 'not_pending' &&
+        ['approved', 'declined', 'declined_spam', 'withdrawn', 'lapsed'].includes(json?.status)) return json;
     if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${json?.error ?? text.slice(0, 200)}`);
     return json;
   }
