@@ -177,6 +177,20 @@ re-read.
 The operator account never trades. Nothing about a move is decided by the
 operator except through this rule.
 
+## Recovery and trading instructions
+
+A failed decline is retained in the saved state and retried once a minute,
+including after restart. It never becomes a retrospective approval. Until
+all abandoned proposals are closed, no new game starts and a finished
+game is not settled. An already closed proposal completes cleanup;
+an unavailable endpoint or unknown proposal stays queued for retry.
+Each tick processes at most one queued closure, after its current move.
+
+The floor links to [How to trade with a bot](trading.md), which includes
+read-only examples, an explicit dry-run trade, the switch to a real trade,
+beta access requirements, and the Stockfish reference bot. Examples obtain
+the API base and workspace from the feed instead of hardcoding a store.
+
 ## The feed
 
 Public JSON, `access-control-allow-origin: *`, `cache-control: no-store`,

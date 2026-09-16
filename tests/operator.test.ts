@@ -559,3 +559,44 @@ describe("the player's record", () => {
     expect(op.publicState(at(62)).player?.games.played).toBe(6);
   });
 });
+
+
+describe('an old move never stays pending because its failed decline was forgotten', () => {
+  it('persists the failed closure, retries after restart, and never approves the fallback', async () => {
+    const f = fakes();
+    f.telarchy.declineProposal = vi.fn().mockRejectedValue(new Error('404'));
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(18));
+    expect(f.of('move')).toHaveLength(1);
+    const saved = JSON.parse(JSON.stringify(op.toJSON()));
+    expect(saved.pendingDeclines).toHaveLength(1);
+    const next = fakes();
+    const back = Operator.fromJSON(next.telarchy, next.lichess, seq(0), { username: ME, seek: true, workspaceId: 'ws-chess' }, saved);
+    await back.tick(at(77));
+    expect(next.of('declineProposal')).toHaveLength(0);
+    await Promise.all([back.tick(at(78)), back.tick(at(78))]);
+    expect(next.of('declineProposal')).toHaveLength(1);
+    await back.tick(at(139));
+    expect(next.of('declineProposal')).toHaveLength(1);
+    expect(back.toJSON().pendingDeclines).toEqual([]);
+    expect(next.of('approveOption')).toHaveLength(0);
+  });
+
+  it('does not settle or accept another game until abandoned proposals close', async () => {
+    const f = fakes();
+    f.telarchy.declineProposal = vi.fn().mockRejectedValue(new Error('offline'));
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(18));
+    await op.onGameState(st('a2a3', { status: 'mate', winner: 'black' }), at(20));
+    expect(f.of('settleMetric')).toHaveLength(0);
+    await op.onChallenge(challenge(), at(100));
+    expect(f.of('accept')).toHaveLength(0);
+    await op.tick(at(200));
+    expect(f.of('challenge')).toHaveLength(0);
+    f.telarchy.declineProposal = vi.fn().mockResolvedValue(undefined);
+    await op.tick(at(260));
+    expect(f.of('settleMetric')).toHaveLength(1);
+  });
+});
