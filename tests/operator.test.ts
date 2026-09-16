@@ -600,3 +600,129 @@ describe('an old move never stays pending because its failed decline was forgott
     expect(f.of('settleMetric')).toHaveLength(1);
   });
 });
+
+describe('NO NEW GAME IS SOUGHT OR ACCEPTED WHILE THE PLATFORM CANNOT PRICE ONE (docs/chess.md, "The search pauses"; owner decision 2026-09-16)', () => {
+  const bot = (username: string, rating: number) => ({ id: username.toLowerCase(), username, perfs: { classical: { rating, games: 50, prov: false } } });
+  const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+  /** Play one game to its end with the given fault, so the operator is idle
+   *  afterwards, with the platform still down: its probe fails too. */
+  async function gameWithFault(f: ReturnType<typeof fakes>) {
+    f.telarchy.refreshBooks = async () => { f.calls.push({ name: 'refreshBooks', args: [] }); throw new Error('503'); };
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.tick(at(1));
+    if (op.publicState(at(1)).open) await op.tick(at(25)); // the decision falls
+    await op.onGameState(st('e2e4 e7e5', { status: 'resign', winner: 'white' }), at(30));
+    await op.tick(at(31));
+    return op;
+  }
+
+  it('a proposal that could not be posted marks the platform down: two idle minutes later nobody is challenged', async () => {
+    const err = quiet();
+    try {
+      const f = fakes({ failPost: true, bots: [bot('Alpha', 1600)] });
+      const op = await gameWithFault(f);
+      const p = op.publicState(at(31)).paused;
+      expect(p).toMatchObject({ since: expect.any(String), reason: expect.stringMatching(/posting failed/) });
+      expect(op.publicState(at(31)).phase).toBe('paused');
+      await op.tick(at(200));
+      expect(f.of('challenge')).toHaveLength(0);
+    } finally { err.mockRestore(); }
+  });
+
+  it('no price on any option marks it down', async () => {
+    const err = quiet();
+    try {
+      const f = fakes({ prices: () => ({}), bots: [bot('Alpha', 1600)] });
+      const op = await gameWithFault(f);
+      expect(op.publicState(at(31)).paused?.reason).toMatch(/no option has a price/);
+      await op.tick(at(200));
+      expect(f.of('challenge')).toHaveLength(0);
+    } finally { err.mockRestore(); }
+  });
+
+  it('a refused approval marks it down', async () => {
+    const err = quiet();
+    try {
+      const f = fakes({ failApprove: true, prices: () => ({ e2e4: { price: 60, lead: 10 } }), bots: [bot('Alpha', 1600)] });
+      const op = await gameWithFault(f);
+      expect(op.publicState(at(31)).paused?.reason).toMatch(/approve of e2e4 failed/);
+      await op.tick(at(200));
+      expect(f.of('challenge')).toHaveLength(0);
+    } finally { err.mockRestore(); }
+  });
+
+  it('an incoming challenge while paused is declined with later', async () => {
+    const err = quiet();
+    try {
+      const f = fakes({ failPost: true });
+      const op = await gameWithFault(f);
+      await op.onChallenge(challenge(), at(40));
+      expect(f.of('decline')).toEqual([{ name: 'decline', args: ['c1', 'later'] }]);
+      expect(f.of('accept')).toHaveLength(0);
+    } finally { err.mockRestore(); }
+  });
+
+  it('the clock guard and a forced move are not platform faults: nothing is marked', async () => {
+    const f = fakes({ bots: [bot('Alpha', 1600)] });
+    const op = operator(f);
+    await op.onGameFull(full('white', { state: st('', { wtime: 20_000 }) }), T0);
+    await op.tick(at(1));
+    expect(f.of('move')).toHaveLength(1);
+    expect(op.publicState(at(1)).paused).toBe(null);
+  });
+
+  it('once a minute the platform is probed with refreshBooks; the first probe that succeeds clears the mark and the search resumes; a failing probe keeps it', async () => {
+    const err = quiet();
+    try {
+      const f = fakes({ failPost: true, bots: [bot('Alpha', 1600)] });
+      let probeFails = true;
+      const op = await gameWithFault(f);
+      f.telarchy.refreshBooks = async () => { f.calls.push({ name: 'refreshBooks', args: [probeFails ? 'probe-fail' : 'probe-ok'] }); if (probeFails) throw new Error('503'); };
+      const probesBefore = f.of('refreshBooks').length;
+      await op.tick(at(100));
+      await op.tick(at(130));
+      expect(f.of('refreshBooks').length - probesBefore).toBe(1); // one probe a minute, not one a tick
+      expect(op.publicState(at(130)).paused).not.toBe(null);
+      probeFails = false;
+      await op.tick(at(200));
+      expect(op.publicState(at(200)).paused).toBe(null);
+      expect(op.publicState(at(200)).phase).toBe('seeking');
+      // the idle rule from here: two minutes idle already passed, so the next tick challenges
+      await op.tick(at(260));
+      expect(f.of('challenge')).toHaveLength(1);
+    } finally { err.mockRestore(); }
+  });
+
+  it('a move the market prices clears the mark', async () => {
+    const err = quiet();
+    try {
+      const f = fakes({ prices: num => (num === 1 ? {} : { g1f3: { price: 60, lead: 10 } }) }); // after 1.e4 e5, Nf3 is legal
+      // The probe never runs during a game, so only the priced move can clear the mark here.
+      f.telarchy.refreshBooks = async () => { throw new Error('503'); };
+      const op = operator(f);
+      await op.onGameFull(full('white'), T0);
+      await op.tick(at(1));
+      await op.tick(at(25));
+      expect(op.publicState(at(25)).paused).not.toBe(null);
+      await op.onGameState(st('e2e4 e7e5'), at(40));
+      await op.tick(at(41));
+      await op.tick(at(95)); // the second move's window has closed and the market priced it
+      expect(op.recentDecisions[0].kind).toBe('market');
+      expect(op.publicState(at(95)).paused).toBe(null);
+    } finally { err.mockRestore(); }
+  });
+
+  it('the mark survives a restart', async () => {
+    const err = quiet();
+    try {
+      const f = fakes({ failPost: true, bots: [bot('Alpha', 1600)] });
+      const op = await gameWithFault(f);
+      const back = Operator.fromJSON(f.telarchy, f.lichess, seq(0), { username: ME, seek: true, workspaceId: 'ws-chess' }, JSON.parse(JSON.stringify(op.toJSON())));
+      expect(back.publicState(at(31)).paused?.reason).toMatch(/posting failed/);
+      await back.tick(at(31));
+      await back.tick(at(400));
+      expect(f.of('challenge')).toHaveLength(0);
+    } finally { err.mockRestore(); }
+  });
+});

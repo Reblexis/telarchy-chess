@@ -168,6 +168,36 @@ When Lichess says it is TelarchyBot's turn:
 - If posting the proposal fails, a random legal move is played at once,
   recorded as `undecided` with the error.
 
+A game already running cannot pause: the opponent's clock runs, so the
+random move above is what a platform fault costs mid-game (Viktor,
+2026-09-16: "okay current random move then"). What pauses is the search.
+
+### The search pauses while the platform cannot price a game
+
+The games pause when they cannot reach the server or trades are not
+working (owner decision 2026-09-16, the telarchy umbrella's
+`notes/snake-through-publishes-2026-09-16.md`). For chess that means:
+**no new game is sought or accepted while the platform cannot price
+one.** The operator marks the platform down the moment a move goes
+`undecided` for a platform reason (a proposal that could not be posted,
+no price on any option, an unreadable proposal, a refused approval) and
+keeps the reason and the instant. The clock guard and a forced move are
+not platform faults and mark nothing. While marked down:
+
+- the player challenges nobody, and an incoming challenge is declined
+  with `later`, like during a game;
+- `phase` is `paused` and `/state` carries `paused: { since, reason }`;
+- once a minute while idle (a running game's moves speak for themselves)
+  the operator probes the platform with the refresh call a move needs
+  (`refreshBooks`), the first probe a minute after the mark; the first
+  probe that succeeds, or the first move the market prices, clears the
+  mark and the search resumes
+  from the idle rule as usual. A probe that fails keeps the mark and is
+  logged with its error.
+
+The mark survives a restart, so a restart into a broken platform does
+not start a game.
+
 Every Telarchy call is bounded: a poll read 10 seconds, the decision's own
 read 2 seconds (after that the decision falls on the last polled prices), a
 write 20 seconds. A Lichess move is bounded at 10 seconds with one retry; a
@@ -201,8 +231,10 @@ listed is present; a value not known yet is `null`.
 `GET /state`, `schema: 1`:
 
 - `phase`: `our-move` (a proposal is open), `their-move`, `settling` (the
-  game is over and its settlement has not gone through), `seeking` (idle,
-  looking for a game).
+  game is over and its settlement has not gone through), `paused` (idle,
+  the platform cannot price a game; "The search pauses" above),
+  `seeking` (idle, looking for a game).
+- `paused`: null, or `{ since, reason }` while the search is paused.
 - `player`: `{ username, url, rating, provisional, games: { played, won,
   lost, drawn } }` as Lichess last reported the account: `rating` the
   classical rating, `provisional` Lichess's own flag, `games` its counts of
@@ -276,6 +308,7 @@ decisions and settlement included. Production follows on Viktor's word.
   tied.
 - The player is in at most one game at a time, and starts or accepts none
   while a finished game's settlement is pending.
+- No new game is sought or accepted while the platform cannot price one.
 - A finished game settles the metric at 100, 50 or 0, once.
 - The operator account never trades, never offers or accepts a draw, never
   resigns.
