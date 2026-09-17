@@ -137,14 +137,13 @@ is retried every minute, and **no new game is sought or accepted until it
 has gone through**: an early settlement settles every open book on the
 metric, so it may only run while that game's books are the only ones open.
 
-**The next game's book opens at the player's average score.** The score has
-no running reading, so a book opened at the metric's value would open at the
-last game's result: 0.1 after a loss, a call nobody made. At a game's end,
-BEFORE the reading and the settlement (the platform opens the next book as
-soon as this one settles), the operator sets the metric's `opensAt` to the
-mean of every finished game's score in its games list, this one included,
-rounded to one decimal; aborted games have no score and do not count. A
-refusal is logged and the end goes on.
+**Every game's book opens at 50.** The score has no running reading, so a
+book opened at the metric's value would open at the last game's result: 0.1
+after a loss, a call nobody made. At a game's end, BEFORE the reading and
+the settlement (the platform opens the next book as soon as this one
+settles), the operator sets the metric's `opensAt` to 50, the middle of the
+score; the settlement itself is always the game's real score. An aborted
+game has no score and sets nothing. A refusal is logged and the end goes on.
 
 **Opening prices are Telarchy's rule, unchanged**: every option book opens
 at the main book's current value (Viktor, 2026-09-13). The operator never
