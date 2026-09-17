@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   WIDTH, HEIGHT, COLUMN, LINK_TEXT, QUESTION,
-  isDrawableState, piecesOf, squareRect, topArrows, rankedMoves, movePairs,
+  isDrawableState, piecesOf, squareRect, topArrows, rankedMoves, leaderRows, lastDecisionLines, callSeries, tradeRows,
   clocksAt, clockText, nextCell, recordLine, renderFrame, drawnTexts, drawnItems,
 } from '../src/frame.js';
 
@@ -241,30 +241,127 @@ describe('the record and the panel', () => {
     expect(rankedMoves(state()).rows.map(x => x.leader)).toEqual([true, false, false, false, false]);
     expect(rankedMoves(state()).more).toBe(0);
   });
-  it('the top moves and "+N more" are drawn while a move is open', () => {
-    const s = state();
-    s.open.options = Array.from({ length: 20 }, (_, i) => opt(`m${i}`, `M${i}`, 50 - i));
-    const texts = drawnTexts(s, NOW);
-    expect(texts).toEqual(expect.arrayContaining(['TOP MOVES', '20 LEGAL', 'M0', 'M4', '+15 more']));
-    expect(texts).not.toContain('M5');
-  });
-  it('writes the game\'s moves as numbered SAN pairs, newest first', () => {
-    expect(movePairs(['e2e4', 'e7e5', 'g1f3'])).toEqual([{ n: 2, white: 'Nf3', black: null }, { n: 1, white: 'e4', black: 'e5' }]);
-    expect(movePairs(['e2e4', 'zzzz', 'g1f3'])).toEqual([{ n: 1, white: 'e4', black: null }]);
-    expect(movePairs([])).toEqual([]);
-    expect(movePairs(Array(12).fill(0).flatMap(() => ['g1f3', 'g8f6', 'f3g1', 'f6g8']).slice(0, 14), 5).map(p => p.n)).toEqual([7, 6, 5, 4, 3]);
-  });
-  it('shows the game panel while no move is open', () => {
-    const s = state({ phase: 'their-move', open: null });
-    s.game.moves = ['e2e4', 'e7e5', 'g1f3'];
-    const texts = drawnTexts(s, NOW);
-    expect(texts).toEqual(expect.arrayContaining(['GAME 11', '2.', 'Nf3', '1.', 'e4', 'e5']));
-    expect(texts).not.toContain('TOP MOVES');
-  });
   it('says it is waiting for the first game when there is none', () => {
     const texts = drawnTexts({ schema: 1, phase: 'seeking', player: null, game: null, open: null, recentDecisions: [] }, NOW);
     expect(texts).toContain('Waiting for the first game');
     expect(texts).toContain(LINK_TEXT);
+  });
+});
+
+const trade = (over: Record<string, unknown> = {}) => ({
+  id: 't1', at: at(5), handle: 'claude-fable', side: 'buy', direction: 'higher', credits: 120, book: 'move', san: 'e4', move: 1, price: 60.1, ...over,
+});
+
+describe('the leading moves', () => {
+  it('the three highest prices, each with a bar within their range: the highest full, the lowest a stub', () => {
+    const rows = leaderRows(state());
+    expect(rows.map(r => r.san)).toEqual(['e4', 'd4', 'Nf3']);
+    expect(rows.map(r => r.leader)).toEqual([true, false, false]);
+    expect(rows[0].bar).toBe(1);
+    expect(rows[2].bar).toBeCloseTo(0.12, 5);
+    expect(rows[1].bar).toBeGreaterThan(rows[2].bar);
+    expect(rows[1].bar).toBeLessThan(1);
+  });
+  it('a tie at the top has no leader and equal prices draw equal, full bars', () => {
+    const s = state(); s.open.options = [opt('a', 'a3', 50), opt('b', 'b3', 50), opt('c', 'c3', 50)];
+    expect(leaderRows(s).map(r => r.leader)).toEqual([false, false, false]);
+    expect(leaderRows(s).map(r => r.bar)).toEqual([1, 1, 1]);
+  });
+  it('an unpriced move has no bar; fewer than three options give fewer rows; none while no move is open', () => {
+    const s = state(); s.open.options = [opt('a', 'a3', 50), opt('b', 'b3', null)];
+    expect(leaderRows(s)).toEqual([{ san: 'a3', price: 50, leader: true, bar: 1 }, { san: 'b3', price: null, leader: false, bar: 0 }]);
+    expect(leaderRows(state({ phase: 'their-move', open: null }))).toEqual([]);
+  });
+  it('is drawn with the number of legal moves, and the old five-row panel is gone', () => {
+    const s = state(); s.open.options = Array.from({ length: 20 }, (_, i) => opt(`m${i}`, `M${i}`, 50 - i));
+    const texts = drawnTexts(s, NOW);
+    expect(texts).toEqual(expect.arrayContaining(['LEADING MOVES', '20 LEGAL', 'M0', 'M1', 'M2']));
+    expect(texts).not.toContain('M3');
+    expect(texts.some(t => /more$/.test(t))).toBe(false);
+  });
+});
+
+describe('the last decision, while no move is open', () => {
+  const decided = (over: Record<string, unknown> = {}) => state({
+    phase: 'their-move', open: null,
+    recentDecisions: [{ game: 11, move: 6, at: at(20), chosen: 'e1g1', san: 'O-O', price: 56.4, tied: 1, kind: 'market', undecidedReason: null, ...over }],
+  });
+  it('says what was chosen at what price, and who is thought about', () => {
+    expect(lastDecisionLines(decided())).toEqual(['Move 6: O-O, chosen at 56.4 of 100', 'Waiting for BretemaBot (2692) to reply']);
+    expect(drawnTexts(decided(), NOW)).toEqual(expect.arrayContaining(['LAST DECISION', 'Move 6: O-O, chosen at 56.4 of 100']));
+  });
+  it('a move not chosen by the market was chosen at random', () => {
+    expect(lastDecisionLines(decided({ kind: 'undecided', price: null }))[0]).toBe('Move 6: O-O, chosen at random');
+    expect(lastDecisionLines(decided({ kind: 'forced', price: null }))[0]).toBe('Move 6: O-O, chosen at random');
+  });
+  it('a decision of an earlier game is not this game\'s; an opponent without a rating has none', () => {
+    const s = decided({ game: 10 }); s.game.opponent = { name: 'Anon', title: null, rating: null };
+    expect(lastDecisionLines(s)).toEqual(['Waiting for the first move', 'Waiting for Anon to reply']);
+  });
+  it('a finished game says so', () => {
+    const s = decided(); s.game.result = 0; s.game.status = 'mate';
+    expect(lastDecisionLines(s)[1]).toBe('Game over');
+  });
+});
+
+describe('the market\'s call', () => {
+  it('is the history ending at the value now, on the metric\'s own 0 to 100', () => {
+    const s = state({ call: { marketId: 'm', value: 58, history: [{ at: at(60), value: 50 }, { at: at(30), value: 55 }] } });
+    expect(callSeries(s)).toEqual({ value: 58, points: [50, 55, 58] });
+    expect(drawnTexts(s, NOW)).toEqual(expect.arrayContaining(["MARKET'S CALL", '58.0', '50']));
+  });
+  it('junk points are dropped and values are held inside 0 to 100', () => {
+    const s = state({ call: { marketId: 'm', value: 140, history: [{ at: at(9), value: 'x' }, { at: at(8), value: -5 }, null] } });
+    expect(callSeries(s)).toEqual({ value: 100, points: [0, 100] });
+  });
+  it('no call yet reads a dash and draws no line, and never throws', () => {
+    expect(callSeries(state())).toEqual({ value: null, points: [] });
+    expect(callSeries(state({ call: 'nonsense' }))).toEqual({ value: null, points: [] });
+    expect(drawnTexts(state(), NOW)).toContain("MARKET'S CALL");
+    expect(() => renderFrame(state({ call: { value: null, history: 7 } }), NOW)).not.toThrow();
+  });
+  it('the line is drawn in the accent inside the column', () => {
+    const s = state({ call: { marketId: 'm', value: 50, history: Array.from({ length: 40 }, (_, i) => ({ at: at(100 - i), value: 50 })) } });
+    const buf = renderFrame(s, NOW);
+    // a flat call at 50 runs along the graph's mid line
+    const hit = [0, 1, 2, -1, -2].some(d => near(px(buf, COLUMN.x + 200, 282 + d), hex('#f59e0b'), 40));
+    expect(hit).toBe(true);
+  });
+});
+
+describe('the trades', () => {
+  it('a row says who, which way it pushed the price, on what, for how much, and where the price went', () => {
+    const s = state({ recentTrades: [trade(), trade({ id: 't2', handle: 'gemini-flash', side: 'sell', direction: 'higher', credits: 0.4, book: 'game', san: null, move: null, price: 57.5 })] });
+    expect(tradeRows(s)).toEqual([
+      { up: true, handle: 'claude-fable', what: 'e4', game: false, credits: '120 cr', price: '60.1' },
+      { up: false, handle: 'gemini-flash', what: 'game', game: true, credits: '<1 cr', price: '57.5' },
+    ]);
+  });
+  it('up is a buy of higher or a sale of lower; down is the other two', () => {
+    const ups = [['buy', 'higher'], ['sell', 'lower'], ['buy', 'lower'], ['sell', 'higher']].map(([side, direction]) =>
+      tradeRows(state({ recentTrades: [trade({ side, direction })] }))[0].up);
+    expect(ups).toEqual([true, true, false, false]);
+  });
+  it('at most five rows, newest first as the feed gives them; credits are whole; a missing price is a dash', () => {
+    const many = Array.from({ length: 9 }, (_, i) => trade({ id: `t${i}`, handle: `h${i}`, credits: 10.6, price: null }));
+    const rows = tradeRows(state({ recentTrades: many }));
+    expect(rows.map(r => r.handle)).toEqual(['h0', 'h1', 'h2', 'h3', 'h4']);
+    expect(rows[0].credits).toBe('11 cr');
+    expect(rows[0].price).toBe('-');
+  });
+  it('junk rows are skipped and no list at all is no rows', () => {
+    expect(tradeRows(state({ recentTrades: [null, 7, { handle: 5 }, trade()] }))).toHaveLength(1);
+    expect(tradeRows(state())).toEqual([]);
+    expect(tradeRows(state({ recentTrades: 'x' }))).toEqual([]);
+  });
+  it('is drawn under TRADES, and says so when there are none', () => {
+    const texts = drawnTexts(state({ recentTrades: [trade()] }), NOW);
+    expect(texts).toEqual(expect.arrayContaining(['TRADES', 'claude-fable', '120 cr', '60.1']));
+    expect(drawnTexts(state(), NOW)).toContain('No trades yet this game');
+  });
+  it('a handle too long for its cell is cut with an ellipsis', () => {
+    const texts = drawnTexts(state({ recentTrades: [trade({ handle: 'an-extraordinarily-long-trader-handle-xyz' })] }), NOW);
+    expect(texts.some(t => t.startsWith('an-extra') && t.endsWith('…'))).toBe(true);
   });
 });
 
@@ -283,6 +380,8 @@ describe('the column', () => {
     const s = state();
     s.game.opponent = { name: 'AnExtraordinarilyLongLichessBotNameXYZ', title: 'BOT', rating: 2692 };
     s.open.options = [opt('e1g1', 'O-O', 99.9), opt('e7e8q', 'exd8=Q+', 12.5), opt('a2a3', 'a3', 0)];
+    s.call = { marketId: 'm', value: 100, history: [{ at: at(9), value: 0 }] };
+    s.recentTrades = Array.from({ length: 6 }, (_, i) => trade({ id: `t${i}`, handle: 'an-extraordinarily-long-trader-handle-xyz', san: 'exd8=Q+', credits: 123456, price: 100 }));
     for (const it of drawnItems(s, NOW)) {
       expect(it.left, it.text).toBeGreaterThanOrEqual(0);
       expect(it.right, it.text).toBeLessThanOrEqual(WIDTH - 24 + 0.5);
