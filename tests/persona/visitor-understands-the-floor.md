@@ -1,9 +1,8 @@
 ---
 persona: first-time-visitor
-url: https://telarchy.com/beta/chess
+url: https://telarchy.com/chess
 look-only: true
 timeout: 1500
-setup: the browser is already signed in to telarchy.com with a staff account. Never press anything in the orange BETA bar at the top (above all "Publish this build" and the build selector), never open "Manage metrics", "Manage dates" or any address containing /admin, and stay on the chess floor and the pages it links to; ignore those staff controls when judging the page
 ---
 # A first-time visitor understands what the chess floor is within a minute
 
