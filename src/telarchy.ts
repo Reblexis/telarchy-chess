@@ -191,6 +191,10 @@ export class HttpTelarchyClient implements TelarchyClient {
     await this.call('POST', '/predictions/markets/refresh', { force: true });
   }
 
+  async setOpensAt(value: number): Promise<void> {
+    await this.call('PUT', `/metrics/${encodeURIComponent(this.o.metricId)}`, { opensAt: value });
+  }
+
   async postReading(value: number, at: Date): Promise<void> {
     await this.call('PUT', `/metrics/${encodeURIComponent(this.o.metricId)}`, { value, asOf: at.toISOString(), updateNote: 'game result' });
   }

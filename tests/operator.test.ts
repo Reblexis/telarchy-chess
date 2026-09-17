@@ -15,6 +15,7 @@ function fakes(opts: {
   prices?: (proposalNumber: number) => Prices;
   failPost?: boolean;
   failApprove?: boolean;
+  failOpensAt?: boolean;
   settleFailures?: number;
   bots?: unknown[];
 } = {}) {
@@ -39,6 +40,10 @@ function fakes(opts: {
       if (opts.failApprove) throw new Error('approve -> 409 proposal_closed');
     },
     async declineProposal(ref) { calls.push({ name: 'declineProposal', args: [ref.id] }); },
+    async setOpensAt(value) {
+      calls.push({ name: 'setOpensAt', args: [value] });
+      if (opts.failOpensAt) throw new Error('PUT /metrics -> 400 No fields to update');
+    },
     async postReading(value, when) { calls.push({ name: 'postReading', args: [value, when.toISOString()] }); },
     async settleMetric(value, when, reason) {
       calls.push({ name: 'settleMetric', args: [value, when.toISOString(), reason] });
@@ -286,6 +291,36 @@ describe('the end settles the game, before anything else starts', () => {
     expect(f.of('settleMetric')).toEqual([{ name: 'settleMetric', args: [100, at(90).toISOString(), 'Game 1 vs OppBot: win'] }]);
     expect(op.publicState(at(91)).phase).toBe('seeking');
   });
+  it('THE NEXT GAME\'S BOOK OPENS AT THE PLAYER\'S AVERAGE SCORE: set before the reading and the settlement', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.onGameFull(full('black'), T0);
+    await op.onGameState(st('f2f3 e7e5 g2g4 d8h4', { status: 'mate', winner: 'black' }), at(90));
+    expect(f.of('setOpensAt')).toEqual([{ name: 'setOpensAt', args: [100] }]);
+    expect(f.names().indexOf('setOpensAt')).toBeLessThan(f.names().indexOf('postReading'));
+    expect(f.names().indexOf('setOpensAt')).toBeLessThan(f.names().indexOf('settleMetric'));
+  });
+  it('the average runs over every finished game, this one included, to one decimal; an aborted game does not count', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.onGameFull(full('black'), T0);
+    await op.onGameState(st('f2f3 e7e5 g2g4 d8h4', { status: 'mate', winner: 'black' }), at(90)); // 100
+    await op.onGameFull(full('white', { id: 'g2' }), at(200));
+    await op.onGameState(st('', { status: 'aborted' }), at(210)); // no score
+    await op.onGameFull(full('white', { id: 'g3' }), at(300));
+    await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(330)); // 0
+    await op.onGameFull(full('white', { id: 'g4' }), at(400));
+    await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(430)); // 0
+    expect(f.of('setOpensAt').map(c => c.args[0])).toEqual([100, 50, 33.3]);
+  });
+  it('a refused opening value is logged and the end still settles', async () => {
+    const f = fakes({ failOpensAt: true });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(30));
+    expect(f.of('settleMetric')).toHaveLength(1);
+    expect(op.publicState(at(31)).phase).toBe('seeking');
+  });
   it('a loss is 0 and a draw 50', async () => {
     const f = fakes();
     const op = operator(f);
@@ -314,6 +349,7 @@ describe('the end settles the game, before anything else starts', () => {
     await op.onGameState(st('', { status: 'aborted' }), at(40));
     expect(f.of('settleMetric')).toHaveLength(0);
     expect(f.of('postReading')).toEqual([]); // an aborted game has no score
+    expect(f.of('setOpensAt')).toEqual([]);
   });
   it('a refused settlement blocks every new game and is retried each minute until it goes through', async () => {
     const f = fakes({ settleFailures: 2 });
