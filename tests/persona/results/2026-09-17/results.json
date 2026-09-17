@@ -28,5 +28,105 @@
     "reason": "I cannot hunt replay bugs because the chess floor has no board or replay row at all.",
     "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/bugs-replay.md",
     "run_dir": ""
+  },
+  {
+    "standard": "1",
+    "test": "design-floor-desktop",
+    "persona": "ux-designer",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "The small, low board loses to the trading controls, and the move page hides essential status labels behind truncation.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/design-floor-desktop.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-163459-3867893"
+  },
+  {
+    "standard": "1",
+    "test": "design-floor-narrow",
+    "persona": "ux-designer",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "At 600 pixels the records stay beside a shrunken board, while the narrow layout has cramped controls, empty gaps, and an assistant bubble covering content.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/design-floor-narrow.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-163917-3908501"
+  },
+  {
+    "standard": "1",
+    "test": "player-connects-prices-to-moves",
+    "persona": "chess-player",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "I can read the moves, but a column of identical 50.0 scores does not tell me what they mean in chess or which move the bot will play.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/player-connects-prices-to-moves.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-164545-3970489"
+  },
+  {
+    "standard": "1",
+    "test": "player-makes-a-move-on-the-board",
+    "persona": "chess-player",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "I could choose Nd7 on the board, but nothing showed me which pieces I could pick up before I clicked.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/player-makes-a-move-on-the-board.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-164723-3986224"
+  },
+  {
+    "standard": "1",
+    "test": "player-trusts-the-board",
+    "persona": "chess-player",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "YES",
+    "reason": "The board is the right way round for Black, I found the last move at a glance every time, and the position was the same as the Lichess game piece for piece on both checks.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/player-trusts-the-board.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-165241-4047030"
+  },
+  {
+    "standard": "1",
+    "test": "trader-sees-a-bet-move-the-price",
+    "persona": "market-trader",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "The bet went in and the price jumped at once, but after that nothing on the screen ever showed me my position on Na7 or what became of my 10 credits once the move was chosen, and the only \"holdings\" text I found said I hold nothing.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/trader-sees-a-bet-move-the-price.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-165706-4094568"
+  },
+  {
+    "standard": "1",
+    "test": "trader-understands-the-bet-before-betting",
+    "persona": "market-trader",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "The terms and the payout are all there and I ended up understanding them, but where the page drops me to bet there is no clock and no rules on screen, so two moves closed under me before I even knew a timer existed.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/trader-understands-the-bet-before-betting.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-170059-4132912"
+  },
+  {
+    "standard": "1",
+    "test": "visitor-reads-the-next-move-line",
+    "persona": "first-time-visitor",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "The clock under the board told me when something would happen, but not who was moving, two pieces jumped at once with only one marked, and once the line named a move the board did not show.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/visitor-reads-the-next-move-line.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-170422-4158181"
+  },
+  {
+    "standard": "1",
+    "test": "visitor-understands-the-floor",
+    "persona": "first-time-visitor",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "I could see a chess game was running and that I could bet, but I could not tell whose turn it was or who the opponent is, and I only learned who picks the moves from a paragraph far down the page and a tiny \"i\", while the screen also told me \"Rookie approved ... choosing g4\", so I was guessing.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/visitor-understands-the-floor.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-171002-12210"
+  },
+  {
+    "standard": "1",
+    "test": "visitor-watches-a-replay",
+    "persona": "first-time-visitor",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "I found the replay and it played fine, but every move of the bot said \"chosen at 50.0\" and nothing on the screen told me what that number is, and once I scrolled up nothing said I was watching an old game.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/visitor-watches-a-replay.md",
+    "run_dir": "/home/cihalvi/.cache/codex-vm-desktop/20260917-171306-44035"
   }
 ]
