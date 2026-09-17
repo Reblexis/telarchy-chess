@@ -1,0 +1,32 @@
+[
+  {
+    "standard": "1",
+    "test": "bot-author-finds-how-to-trade",
+    "persona": "bot-author",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "I found a starter bot, but I still cannot tell it where to read the chess game, so I would not start writing tonight.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/bot-author-finds-how-to-trade.md",
+    "run_dir": ""
+  },
+  {
+    "standard": "1",
+    "test": "bugs-live-board",
+    "persona": "bug-hunter",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "Opening a move trapped me on its page: neither repeated Alt+Left nor the browser Back button returned me to the chess floor.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/bugs-live-board.md",
+    "run_dir": ""
+  },
+  {
+    "standard": "1",
+    "test": "bugs-replay",
+    "persona": "bug-hunter",
+    "url": "https://telarchy.com/beta/chess",
+    "verdict": "NO",
+    "reason": "I cannot hunt replay bugs because the chess floor has no board or replay row at all.",
+    "report": "/home/cihalvi/src/worktrees/telarchy-chess/persona-tests/tests/persona/results/2026-09-17/bugs-replay.md",
+    "run_dir": ""
+  }
+]
