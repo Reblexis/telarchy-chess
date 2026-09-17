@@ -158,6 +158,7 @@ export class Operator {
   private bookNames = new Map<string, { san: string; move: number }>();
   private activityAt = 0;
   private activityBusy = false;
+  private activityError: string | null = null;
   games: Array<Omit<GameRecord, 'moves' | 'clocks' | 'inc'> & { plies: number }> = [];
   settlement: Settlement | null = null;
   pendingDeclines: Array<{ ref: ProposalRef; nextTryAt: number }> = [];
@@ -446,8 +447,12 @@ export class Operator {
       const seen = new Set(rows.map(r => r.id));
       this.recentTrades = [...rows, ...this.recentTrades.filter(r => !seen.has(r.id))]
         .sort((x, y) => (x.at < y.at ? 1 : x.at > y.at ? -1 : 0)).slice(0, TRADES_KEPT);
-    } catch {
-      // keep the last call and trades
+      this.activityError = null;
+    } catch (e) {
+      // keep the last call and trades; say why once, not every five seconds
+      const why = (e as Error)?.message ?? String(e);
+      if (why !== this.activityError) console.error(`activity: ${why}`);
+      this.activityError = why;
     } finally {
       this.activityBusy = false;
     }
