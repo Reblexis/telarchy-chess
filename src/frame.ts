@@ -32,7 +32,7 @@ const LOGO_H = 18;
 
 /** The one call to action. */
 export const LINK_TEXT = 'telarchy.com/chess';
-export const QUESTION = 'What will I score in this game?';
+export const QUESTION = 'What score will I reach this game?';
 
 const BG = '#101013';
 const LINE = '#2a2a32';
@@ -310,7 +310,7 @@ function draw(s: any, now: number, items: DrawnItem[]): Canvas {
   hairline(X + third, LAYOUT.statsTop, X + third, LAYOUT.statsBottom);
   hairline(X + 2 * third, LAYOUT.statsTop, X + 2 * third, LAYOUT.statsBottom);
   const p = s.player && typeof s.player === 'object' ? s.player : null;
-  const ours = `${typeof p?.username === 'string' ? p.username : 'TelarchyBot'}${isNum(p?.rating) ? ` ${p.rating}${p.provisional ? '?' : ''}` : ''}`;
+  const ours = `${typeof p?.username === 'string' ? p.username : 'TelarchyRookie'}${isNum(p?.rating) ? ` ${p.rating}${p.provisional ? '?' : ''}` : ''}`;
   const opp = g?.opponent && typeof g.opponent === 'object' ? g.opponent : null;
   const theirs = opp ? `${typeof opp.name === 'string' ? opp.name : '?'}${isNum(opp.rating) ? ` ${opp.rating}` : ''}` : 'Opponent';
   const clocks = clocksAt(s, now);

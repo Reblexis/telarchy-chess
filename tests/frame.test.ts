@@ -273,7 +273,7 @@ describe('the column', () => {
     const texts = drawnTexts(state(), NOW);
     expect(texts).toEqual(expect.arrayContaining(['Chess', QUESTION, LINK_TEXT, 'NEXT MOVE', '0:31', '9:50', '15:00']));
     expect(LINK_TEXT).toBe('telarchy.com/chess');
-    expect(QUESTION).toBe('What will I score in this game?');
+    expect(QUESTION).toBe('What score will I reach this game?');
   });
   it('names both players with their ratings over their clocks', () => {
     const texts = drawnTexts(state(), NOW);
