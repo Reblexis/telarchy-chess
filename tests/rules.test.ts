@@ -148,23 +148,23 @@ describe('which challenges are accepted', () => {
 
 describe('which bot is challenged', () => {
   const bot = (username: string, rating: number, prov = false, games = 100) => ({ id: username.toLowerCase(), username, perfs: { classical: { rating, games, prov } } });
-  const bots = [bot('Near', 1600), bot('Far', 2100), bot('Prov', 1550, true), bot('Recent', 1650), bot('TelarchyBot', 1500), { id: 'noclassical', username: 'NoClassical', perfs: {} }];
+  const bots = [bot('Near', 1600), bot('Far', 2100), bot('Prov', 1550, true), bot('Recent', 1650), bot('TelarchyRookie', 1500), { id: 'noclassical', username: 'NoClassical', perfs: {} }];
   it('an established classical rating within 200 of ours, not recent, not ourselves', () => {
-    expect(pickOpponent(bots, { username: 'TelarchyBot', rating: 1500, provisional: false }, ['recent'], seq(0))).toBe('near');
+    expect(pickOpponent(bots, { username: 'TelarchyRookie', rating: 1500, provisional: false }, ['recent'], seq(0))).toBe('near');
   });
   it('any established rating while ours is provisional', () => {
     const pool = new Set<string | null>();
-    for (const r of [0, 0.4, 0.99]) pool.add(pickOpponent(bots, { username: 'TelarchyBot', rating: 1500, provisional: true }, ['recent'], seq(r)));
+    for (const r of [0, 0.4, 0.99]) pool.add(pickOpponent(bots, { username: 'TelarchyRookie', rating: 1500, provisional: true }, ['recent'], seq(r)));
     expect([...pool].sort()).toEqual(['far', 'near']);
   });
   it('nobody suitable is null', () => {
-    expect(pickOpponent([bot('Far', 2100)], { username: 'TelarchyBot', rating: 1500, provisional: false }, [], seq(0))).toBeNull();
+    expect(pickOpponent([bot('Far', 2100)], { username: 'TelarchyRookie', rating: 1500, provisional: false }, [], seq(0))).toBeNull();
   });
 });
 
 describe('when nobody qualifies, the rule loosens in order (Viktor 2026-09-14)', () => {
   const bot = (username: string, rating: number, prov = false, games = 100) => ({ id: username.toLowerCase(), username, perfs: { classical: { rating, games, prov } } });
-  const me = { username: 'TelarchyBot', rating: 1000, provisional: false };
+  const me = { username: 'TelarchyRookie', rating: 1000, provisional: false };
   // recent is newest first: 'last' is the very last opponent.
   const recent = ['last', 'r2', 'r3', 'r4', 'r5'];
 
@@ -209,7 +209,7 @@ describe('when nobody qualifies, the rule loosens in order (Viktor 2026-09-14)',
   });
 
   it('still never ourselves, a provisional bot, or a bot without a classical rating', () => {
-    const bots = [bot('TelarchyBot', 1000), bot('Prov', 1000, true), { id: 'noclassical', username: 'NoClassical', perfs: {} }];
+    const bots = [bot('TelarchyRookie', 1000), bot('Prov', 1000, true), { id: 'noclassical', username: 'NoClassical', perfs: {} }];
     expect(pickOpponent(bots, me, [], seq(0))).toBeNull();
   });
 });

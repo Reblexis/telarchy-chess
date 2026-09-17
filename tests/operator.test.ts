@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Operator, type TelarchyClient, type LichessClient, type Prices } from '../src/operator.js';
 import { legalOptions, fenAfter } from '../src/rules.js';
 
-const ME = 'TelarchyBot';
+const ME = 'TelarchyRookie';
 const T0 = new Date('2026-09-13T14:00:00Z');
 const at = (s: number) => new Date(T0.getTime() + s * 1000);
 const seq = (...v: number[]) => { let i = 0; return () => v[Math.min(i++, v.length - 1)]; };
@@ -55,7 +55,7 @@ function fakes(opts: {
     async onlineBots() { calls.push({ name: 'onlineBots', args: [] }); return (opts.bots ?? []) as never; },
     async account() {
       calls.push({ name: 'account', args: [] });
-      return { username: ME, url: 'https://lichess.org/@/TelarchyBot', rating: 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 } };
+      return { username: ME, url: 'https://lichess.org/@/TelarchyRookie', rating: 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 } };
     },
   };
   const names = () => calls.map(c => c.name);
@@ -67,8 +67,8 @@ const full = (color: 'white' | 'black', over: Record<string, unknown> = {}) => (
   id: 'g1',
   rated: true,
   clock: { initial: 1_800_000, increment: 20_000 },
-  white: color === 'white' ? { id: 'telarchybot', name: ME, rating: 1500 } : { id: 'oppbot', name: 'OppBot', title: 'BOT', rating: 1520 },
-  black: color === 'black' ? { id: 'telarchybot', name: ME, rating: 1500 } : { id: 'oppbot', name: 'OppBot', title: 'BOT', rating: 1520 },
+  white: color === 'white' ? { id: 'telarchyrookie', name: ME, rating: 1500 } : { id: 'oppbot', name: 'OppBot', title: 'BOT', rating: 1520 },
+  black: color === 'black' ? { id: 'telarchyrookie', name: ME, rating: 1500 } : { id: 'oppbot', name: 'OppBot', title: 'BOT', rating: 1520 },
   state: { moves: '', wtime: 1_800_000, btime: 1_800_000, winc: 20_000, binc: 20_000, status: 'started' },
   ...over,
 });
@@ -533,7 +533,7 @@ describe("the player's record", () => {
     await op.tick(T0);
     expect(f.of('account')).toHaveLength(1);
     expect(op.publicState(at(1)).player).toEqual({
-      username: ME, url: 'https://lichess.org/@/TelarchyBot', rating: 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 },
+      username: ME, url: 'https://lichess.org/@/TelarchyRookie', rating: 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 },
     });
     await op.tick(at(30));
     expect(f.of('account')).toHaveLength(1);

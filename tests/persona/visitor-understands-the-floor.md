@@ -16,4 +16,4 @@ You followed a link that said only "look at this". Work out what this page is: w
 - nothing you clicked left you lost or unable to get back to the board
 
 ## For the reviewer
-Right: TelarchyBot plays real rated games on Lichess; for each of its turns every legal move has a market, and the move priced highest is played. A sentence that says the bot or an engine picks its own moves is a misunderstanding; treat that YES as a NO.
+Right: TelarchyRookie plays real rated games on Lichess; for each of its turns every legal move has a market, and the move priced highest is played. A sentence that says the bot or an engine picks its own moves is a misunderstanding; treat that YES as a NO.

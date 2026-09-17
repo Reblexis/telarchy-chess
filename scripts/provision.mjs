@@ -50,7 +50,7 @@ console.error('# creating metric Game score');
 const metric = await call('POST', '/metrics', {
   name: 'Game score',
   description:
-    'TelarchyBot\'s result in its current Lichess game, from its own side: 100 for a win, 50 for a draw, 0 for a loss. Every move of the game is a proposal with one option per legal move; the option priced highest is played. The game\'s books settle the moment the game ends.',
+    'TelarchyRookie\'s result in its current Lichess game, from its own side: 100 for a win, 50 for a draw, 0 for a loss. Every move of the game is a proposal with one option per legal move; the option priced highest is played. The game\'s books settle the moment the game ends.',
   value: 50,
   marketRangeMin: 0,
   marketRangeMax: 100,

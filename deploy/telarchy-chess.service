@@ -1,6 +1,6 @@
 # systemd --user unit for futarchy chess (docs/chess.md, "Operation").
 [Unit]
-Description=Futarchy chess operator (TelarchyBot on Lichess)
+Description=Futarchy chess operator (TelarchyRookie on Lichess)
 After=network-online.target
 
 [Service]
