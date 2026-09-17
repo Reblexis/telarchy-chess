@@ -296,9 +296,13 @@ the workspace and metric ids, the Lichess token (scopes `bot:play`, `challenge:r
 `challenge:write`), the port, the state file, and `SEEK` (off disables
 challenging bots, so the player only answers challenges).
 
-**Beta first.** It plays its first games on Lichess against the beta store
-(`https://telarchy.com/beta/api`) until a whole game has run end to end,
-decisions and settlement included. Production follows on Viktor's word.
+**It runs on production** (`https://telarchy.com/api`, the floor at
+`https://telarchy.com/chess`), with the operator's key alone: production has
+no gate, so no session and no branch are configured. Game numbers on the
+floor start at 1 with the production floor. The beta store
+(`https://telarchy.com/beta/api`, admin session and branch as above) is where
+a change to the operator is tried for a whole game, decisions and settlement
+included, before it reaches production.
 
 ## Persona tests
 

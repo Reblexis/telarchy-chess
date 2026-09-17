@@ -5,6 +5,8 @@
 // session rides along only to open the gate. Prints the env lines the service
 // needs.
 //
+//   Production: BASE=https://telarchy.com/api KEY=<chess-operator key> FEED_URL=... (no EMAIL, no BRANCH)
+//   Beta:
 //   BASE=https://telarchy.com/beta/api KEY=<chess-operator key> \
 //   EMAIL=<admin> PASSWORD=... BRANCH=br-chess-live-feed \
 //   FEED_URL=https://chess.167-233-147-90.nip.io node scripts/provision.mjs
