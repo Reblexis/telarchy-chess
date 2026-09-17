@@ -132,7 +132,7 @@ describe('the Telarchy client', () => {
     await c.postReading(100, new Date('2026-09-13T15:00:00Z'));
     await c.settleMetric(100, new Date('2026-09-13T15:00:00Z'), 'Game 1 vs X: win');
     const put = reqs.find(r => r.method === 'PUT' && r.body?.includes('customHorizons'))!;
-    expect(JSON.parse(put.body!).timePreference).toEqual({ enabled: false, customHorizons: [CELL], horizonCredits: { [CELL]: { book: 3000, proposal: 1000 } } });
+    expect(JSON.parse(put.body!).timePreference).toEqual({ enabled: false, customHorizons: [CELL], horizonCredits: { [CELL]: { book: 6000, proposal: 2000 } } });
     expect(JSON.parse(reqs.find(r => r.body?.includes('"value":100') && r.method === 'PUT')!.body!)).toMatchObject({ value: 100, asOf: '2026-09-13T15:00:00.000Z' });
     const settle = reqs.find(r => r.url.endsWith('/metrics/m1/settle'))!;
     expect(JSON.parse(settle.body!)).toEqual({ value: 100, asOf: '2026-09-13T15:00:00.000Z', reason: 'Game 1 vs X: win' });
@@ -227,4 +227,12 @@ describe('closure retries stop only when the proposal is known closed', () => {
     const { f } = fakeFetch(() => ({ status, body: { error: 'failed' } }));
     await expect(new HttpTelarchyClient({ ...base, apiKey: 'k' }, f).declineProposal({ id: 'p1', number: 1, url: '' })).rejects.toThrow();
   });
+});
+
+// docs/chess.md "Liquidity": twice the snake's, because a chess move waits on
+// the opponent and so takes about twice as long (Viktor, 2026-09-17).
+import { MAIN_BOOK_CREDITS, OPTION_BOOK_CREDITS } from '../src/telarchy.js';
+describe('liquidity is double the snake\'s: 6,000 on the game book, 2,000 on each move', () => {
+  it('the main book opens with 6,000 credits', () => expect(MAIN_BOOK_CREDITS).toBe(6000));
+  it('each legal move\'s book opens with 2,000 credits', () => expect(OPTION_BOOK_CREDITS).toBe(2000));
 });
