@@ -138,6 +138,16 @@ describe('the Telarchy client', () => {
     expect(JSON.parse(settle.body!)).toEqual({ value: 100, asOf: '2026-09-13T15:00:00.000Z', reason: 'Game 1 vs X: win' });
   });
 
+  it('the opening value is a PUT of opensAt on the metric, and nothing else', async () => {
+    const { f, reqs } = fakeFetch(() => ({ body: {} }));
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, f);
+    await c.setOpensAt(33.3);
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].method).toBe('PUT');
+    expect(reqs[0].url.endsWith('/metrics/m1')).toBe(true);
+    expect(JSON.parse(reqs[0].body!)).toEqual({ opensAt: 33.3 });
+  });
+
   it('the operator client has no way to trade', () => {
     const names = Object.getOwnPropertyNames(HttpTelarchyClient.prototype);
     expect(names.some(n => /trade|order|buy|sell/i.test(n))).toBe(false);
