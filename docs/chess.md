@@ -300,6 +300,17 @@ challenging bots, so the player only answers challenges).
 (`https://telarchy.com/beta/api`) until a whole game has run end to end,
 decisions and settlement included. Production follows on Viktor's word.
 
+## Persona tests
+
+What only a person at the screen can judge (a visitor understands the floor,
+a chess player trusts the board, a trader understands a bet within a move's
+window, a bot author finds the way in, nothing breaks under real clicking, the
+design holds) is tested by the suite in `tests/persona/`, in the persona test
+standard: one yes/no question per file, answered by a persona using the page
+on a VM with mouse and keyboard only. Its `README.md` says how to run it.
+These tests are started by a person and by nothing else: they are not part of
+`npm test`, CI, a hook or a timer.
+
 ## What must hold
 
 - Every move TelarchyBot plays with two or more legal moves available is
