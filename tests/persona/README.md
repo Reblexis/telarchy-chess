@@ -25,7 +25,9 @@ Before a run:
 
 - The floor is on the beta store, behind a sign-in. Sign the VM's browser in
   once, in the profile the tester uses (`chromium --user-data-dir=/tmp/codex-run`,
-  through `vm-desktop`), with an account that may open `/beta`. Each test's
+  through `vm-desktop`), with an account that may open `/beta`, and leave it
+  open for a minute before closing it: Chromium saves its cookies every 30
+  seconds, and a browser closed sooner comes back signed out. Each test's
   `setup` line says what it needs; `trader-sees-a-bet-move-the-price` also
   needs 100 credits and is the only test that spends anything (10 credits).
 - Most tests need a game in progress.
