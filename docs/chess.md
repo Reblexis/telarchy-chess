@@ -101,6 +101,17 @@ set by the owner as the metric's `marketTitle`, verbatim: **"What score
 will I reach this game?"**, so the floor never composes one with a clock
 time in it.
 
+**The move question and the floor's text are set at provisioning**, so a
+floor made again reads the same. The workspace's option question
+(`optionQuestionTemplate`), verbatim: **"If the move {option} is made, what
+will {workspace}'s final {metric} be?"**, never the platform default "With
+{option}, ...", which reads a move as a noun phrase. The workspace's about
+text (`subjectAbout`): who plays and where (the Lichess account, linked), one
+proposal a turn with every legal move an option, the score each option is
+priced on, the highest price played two seconds before the deadline with the
+rest voided and refunded, a tie random, every open book settled at the result,
+then a link to [How to trade with a bot](trading.md).
+
 **One book per game.** When a game starts, the operator first posts a
 reading of 50 (no result yet), so the game's main book, and every option
 book anchored to it, opens at the middle and never at the last game's
