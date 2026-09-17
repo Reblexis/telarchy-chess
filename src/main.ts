@@ -119,3 +119,6 @@ createServer(op).listen(PORT, '127.0.0.1', () => console.log(`feed on 127.0.0.1:
 await serial(() => op.resume(new Date()));
 void followEvents();
 setInterval(() => { if (queued === 0) void serial(() => op.tick(new Date())); }, 500);
+// docs/chess.md "The feed", `call` and `recentTrades`: its own timer, outside the
+// serial queue, so a slow public read can never delay a move's decision.
+setInterval(() => { void op.pollActivity(new Date()).catch(() => {}); }, 1000);

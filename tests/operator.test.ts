@@ -727,3 +727,120 @@ describe('NO NEW GAME IS SOUGHT OR ACCEPTED WHILE THE PLATFORM CANNOT PRICE ONE 
     } finally { err.mockRestore(); }
   });
 });
+
+// docs/chess.md "The feed": `call` and `recentTrades`, for the stream.
+describe('the feed carries the game\'s call and its trades', () => {
+  const MAIN = 'm-main';
+  const activity = (over: Record<string, unknown> = {}) => ({
+    call: { marketId: MAIN, value: 57.5, history: [{ at: at(1).toISOString(), value: 50 }, { at: at(20).toISOString(), value: 57.5 }] },
+    trades: [
+      { id: 't3', at: at(22).toISOString(), handle: 'claude-fable', side: 'buy', direction: 'higher', credits: 120, marketId: 'm-e2e4', price: 60.1 },
+      { id: 't2', at: at(20).toISOString(), handle: 'gemini-flash', side: 'sell', direction: 'higher', credits: 40, marketId: MAIN, price: 57.5 },
+      { id: 't1', at: at(12).toISOString(), handle: 'stranger', side: 'buy', direction: 'lower', credits: 5, marketId: 'm-some-old-book', price: 12 },
+      { id: 't0', at: new Date(T0.getTime() - 3600_000).toISOString(), handle: 'early', side: 'buy', direction: 'higher', credits: 9, marketId: MAIN, price: 70 },
+    ],
+    ...over,
+  });
+  const priced = () => ({ e2e4: { price: 60.1, lead: 1, marketId: 'm-e2e4' }, d2d4: { price: 55, lead: -5, marketId: 'm-d2d4' } });
+  async function playing(f: ReturnType<typeof fakes>, read: () => Promise<unknown>) {
+    (f.telarchy as { readActivity?: unknown }).readActivity = read;
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);            // our move: a proposal opens
+    await op.tick(at(6));                               // a price poll names the option books
+    return op;
+  }
+
+  it('before any read both are empty, never missing', async () => {
+    const f = fakes({ prices: priced });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    const s = op.publicState(at(1)) as { call: unknown; recentTrades: unknown[] };
+    expect(s.call).toBeNull();
+    expect(s.recentTrades).toEqual([]);
+  });
+
+  it('names each trade by its move, the main book as the game, newest first', async () => {
+    const f = fakes({ prices: priced });
+    const op = await playing(f, async () => activity());
+    await op.pollActivity(at(25));
+    const s = op.publicState(at(26)) as { call: { value: number; history: unknown[] }; recentTrades: Array<Record<string, unknown>> };
+    expect(s.call.value).toBe(57.5);
+    expect(s.call.history).toHaveLength(2);
+    expect(s.recentTrades.map(t => t.id)).toEqual(['t3', 't2']);
+    expect(s.recentTrades[0]).toMatchObject({ handle: 'claude-fable', side: 'buy', direction: 'higher', credits: 120, book: 'move', san: 'e4', move: 1, price: 60.1 });
+    expect(s.recentTrades[1]).toMatchObject({ handle: 'gemini-flash', side: 'sell', book: 'game', san: null, move: null, price: 57.5 });
+  });
+
+  it('a trade on a book it does not know, or from before this game, is left out', async () => {
+    const f = fakes({ prices: priced });
+    const op = await playing(f, async () => activity());
+    await op.pollActivity(at(25));
+    const ids = (op.publicState(at(26)) as { recentTrades: Array<{ id: string }> }).recentTrades.map(t => t.id);
+    expect(ids).not.toContain('t1');
+    expect(ids).not.toContain('t0');
+  });
+
+  it('a move keeps its name after it has been decided', async () => {
+    const f = fakes({ prices: priced });
+    const op = await playing(f, async () => activity());
+    await op.tick(at(60));                              // the move is decided and played
+    await op.pollActivity(at(61));
+    const t = (op.publicState(at(62)) as { recentTrades: Array<Record<string, unknown>> }).recentTrades.find(x => x.id === 't3');
+    expect(t).toMatchObject({ book: 'move', san: 'e4', move: 1 });
+  });
+
+  it('A FAILED OR SLOW READ KEEPS THE LAST VALUES AND NEVER THROWS', async () => {
+    const f = fakes({ prices: priced });
+    let fail = false;
+    const op = await playing(f, async () => { if (fail) throw new Error('502'); return activity(); });
+    await op.pollActivity(at(25));
+    fail = true;
+    await expect(op.pollActivity(at(31))).resolves.toBeUndefined();
+    const s = op.publicState(at(32)) as { call: { value: number }; recentTrades: unknown[] };
+    expect(s.call.value).toBe(57.5);
+    expect(s.recentTrades).toHaveLength(2);
+  });
+
+  it('reads at most once every five seconds, only while a game runs, and one at a time', async () => {
+    const f = fakes({ prices: priced });
+    let reads = 0;
+    let release: () => void = () => {};
+    const op = await playing(f, () => { reads++; return new Promise(r => { release = () => r(activity()); }); });
+    const first = op.pollActivity(at(25));
+    await op.pollActivity(at(26));                      // one already in flight
+    expect(reads).toBe(1);
+    release(); await first;
+    await op.pollActivity(at(27));                      // too soon
+    expect(reads).toBe(1);
+    const idle = operator(fakes());
+    (idle as unknown as { telarchy: { readActivity: () => Promise<unknown> } }).telarchy.readActivity = async () => { reads++; return activity(); };
+    await idle.pollActivity(at(100));                   // no game
+    expect(reads).toBe(1);
+  });
+
+  it('the decision never waits for it: a tick decides while an activity read hangs', async () => {
+    const f = fakes({ prices: priced });
+    const op = await playing(f, () => new Promise(() => {}));
+    void op.pollActivity(at(25));
+    await op.tick(at(60));
+    expect(f.of('approveOption')).toHaveLength(1);
+  });
+
+  it('a client with no activity read leaves both empty', async () => {
+    const f = fakes({ prices: priced });
+    const op = operator(f);
+    await op.onGameFull(full('white'), T0);
+    await expect(op.pollActivity(at(25))).resolves.toBeUndefined();
+    expect((op.publicState(at(26)) as { call: unknown }).call).toBeNull();
+  });
+
+  it('a new game starts with neither', async () => {
+    const f = fakes({ prices: priced });
+    const op = await playing(f, async () => activity());
+    await op.pollActivity(at(25));
+    await op.onGameFull(full('white', { id: 'g2' }), at(4000));
+    const s = op.publicState(at(4001)) as { call: unknown; recentTrades: unknown[] };
+    expect(s.call).toBeNull();
+    expect(s.recentTrades).toEqual([]);
+  });
+});

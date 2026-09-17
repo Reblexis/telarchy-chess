@@ -236,3 +236,62 @@ describe('liquidity is double the snake\'s: 6,000 on the game book, 2,000 on eac
   it('the main book opens with 6,000 credits', () => expect(MAIN_BOOK_CREDITS).toBe(6000));
   it('each legal move\'s book opens with 2,000 credits', () => expect(OPTION_BOOK_CREDITS).toBe(2000));
 });
+
+// docs/chess.md "The feed", `call` and `recentTrades`: Telarchy's public reads.
+describe('the Telarchy client reads the game\'s call and the floor\'s trades', () => {
+  const base = { baseUrl: 'https://telarchy.com/api', workspaceId: 'ws1', metricId: 'm1', workspaceUrl: 'https://telarchy.com/chess', apiKey: 'k1' };
+  const route = (r: Req) => {
+    const u = new URL(r.url);
+    if (u.pathname === '/api/marketplace/ws1') return { body: { markets: [
+      { marketId: 'other', metricId: 'mX', consensus: 3 },
+      { marketId: 'main', metricId: 'm1', consensus: 57.46 },
+    ] } };
+    if (u.pathname === '/api/marketplace/ws1/markets/main/history') return { body: { history: [
+      { at: '2026-09-17T18:50:56.365Z', consensus: 50 }, { at: '2026-09-17T18:51:26.416Z', consensus: 57.46 }, { at: 'bad', consensus: 'x' },
+    ] } };
+    if (u.pathname === '/api/data-room/actions') return { body: { rows: [
+      { id: 'trade:a', at: '2026-09-17T18:51:26.416Z', kind: 'trade', actor: { id: 'gemini-flash', handle: 'gemini-flash' },
+        detail: { side: 'buy', direction: 'lower', shares: 0.09, cost: 0.085, callBefore: 8, callAfter: 7.9, marketId: 'main' } },
+      { id: 'trade:b', at: '2026-09-17T18:50:56.365Z', kind: 'trade', actor: { id: 'p1' },
+        detail: { side: 'sell', direction: 'higher', cost: 31.85, callAfter: 8, marketId: 'opt' } },
+      { id: 'order:c', at: '2026-09-17T18:50:00.000Z', kind: 'order', detail: { marketId: 'opt' } },
+      { id: 'trade:d', at: '2026-09-17T18:49:00.000Z', kind: 'trade', detail: {} },
+    ] } };
+    return { status: 404, body: { error: 'nope' } };
+  };
+
+  it('one read each of the floor, the main book\'s history and the trade log', async () => {
+    const { f, reqs } = fakeFetch(route);
+    const a = await new HttpTelarchyClient(base, f).readActivity();
+    expect(a.call).toEqual({ marketId: 'main', value: 57.46, history: [
+      { at: '2026-09-17T18:50:56.365Z', value: 50 }, { at: '2026-09-17T18:51:26.416Z', value: 57.46 },
+    ] });
+    expect(a.trades).toEqual([
+      { id: 'trade:a', at: '2026-09-17T18:51:26.416Z', handle: 'gemini-flash', side: 'buy', direction: 'lower', credits: 0.085, marketId: 'main', price: 7.9 },
+      { id: 'trade:b', at: '2026-09-17T18:50:56.365Z', handle: 'p1', side: 'sell', direction: 'higher', credits: 31.85, marketId: 'opt', price: 8 },
+    ]);
+    const log = reqs.find(r => r.url.includes('/data-room/actions'))!;
+    expect(new URL(log.url).searchParams.get('workspace')).toBe('ws1');
+    expect(new URL(log.url).searchParams.get('kinds')).toBe('trade');
+    expect(reqs.every(r => r.method === 'GET')).toBe(true);
+  });
+
+  it('THE OPERATOR NEVER TRADES: the activity read sends no key and writes nothing', async () => {
+    const { f, reqs } = fakeFetch(route);
+    await new HttpTelarchyClient(base, f).readActivity();
+    expect(reqs.some(r => 'x-agent-key' in r.headers)).toBe(false);
+    expect(reqs.some(r => r.method !== 'GET')).toBe(false);
+  });
+
+  it('no main book for the metric: the call is null, the trades still come', async () => {
+    const { f } = fakeFetch(r => (new URL(r.url).pathname === '/api/marketplace/ws1' ? { body: { markets: [] } } : route(r)));
+    const a = await new HttpTelarchyClient(base, f).readActivity();
+    expect(a.call).toBeNull();
+    expect(a.trades).toHaveLength(2);
+  });
+
+  it('a failed trade log rejects, so the operator keeps what it had', async () => {
+    const { f } = fakeFetch(r => (r.url.includes('/data-room/') ? { status: 502, body: 'bad gateway' } : route(r)));
+    await expect(new HttpTelarchyClient(base, f).readActivity()).rejects.toThrow();
+  });
+});
