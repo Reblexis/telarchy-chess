@@ -73,6 +73,11 @@ await call('PUT', `/workspaces/${wsId}/settings`, {
   notificationsMuted: true,
   externalProposalsDisabled: true,
   description: 'A Lichess player whose every move is chosen by this market: on its turn every legal move is an option, and the one priced highest is played.',
+  // The move question and the about text (docs/chess.md, "The workspace"): set here so a re-made floor never
+  // falls back to the platform's "With {option}, ..." wording.
+  optionQuestionTemplate: "If the move {option} is made, what will {workspace}'s final {metric} be?",
+  subjectAbout:
+    'TelarchyRookie plays real games on Lichess (lichess.org/@/TelarchyRookie). On each of its turns one proposal appears with every legal move as an option. Each option is priced on Game score: 100 if TelarchyRookie wins this game, 50 for a draw, 0 for a loss. Two seconds before the deadline the highest priced move is played and the others void with a refund; a tie is random. When the game ends every open book settles at the result.\n\n[How to trade with a bot](https://github.com/Reblexis/telarchy-chess/blob/main/docs/trading.md)',
   ...(FEED_URL ? { liveFeed: { kind: 'chess', url: FEED_URL } } : {}),
 }, wsId);
 
