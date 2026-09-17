@@ -801,6 +801,21 @@ describe('the feed carries the game\'s call and its trades', () => {
     expect(s.recentTrades).toHaveLength(2);
   });
 
+  it('a failed read says why in the log, once per distinct reason, not every five seconds', async () => {
+    const f = fakes({ prices: priced });
+    let msg = '502 bad gateway';
+    const op = await playing(f, async () => { throw new Error(msg); });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await op.pollActivity(at(25)); await op.pollActivity(at(31)); await op.pollActivity(at(37));
+      expect(err.mock.calls.filter(c => String(c[0]).includes('activity'))).toHaveLength(1);
+      expect(String(err.mock.calls.find(c => String(c[0]).includes('activity'))![0])).toContain('502 bad gateway');
+      msg = 'timeout';
+      await op.pollActivity(at(43));
+      expect(err.mock.calls.filter(c => String(c[0]).includes('activity'))).toHaveLength(2);
+    } finally { err.mockRestore(); }
+  });
+
   it('reads at most once every five seconds, only while a game runs, and one at a time', async () => {
     const f = fakes({ prices: priced });
     let reads = 0;
