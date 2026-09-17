@@ -47,6 +47,18 @@ describe('provisioning the Chess floor', () => {
     expect(calls.find(c => c.url.endsWith('/auth/profile'))?.body).toEqual({ nickname: 'Rookie' });
   });
 
+  it('the platform\'s starter proposal is removed: the floor carries move proposals and nothing else', () => {
+    const { calls } = provision();
+    const del = calls.filter(c => c.method === 'DELETE');
+    expect(del.map(c => c.url)).toEqual(['https://store.test/api/proposals/starter-1']);
+    // After the workspace exists, since the removal is addressed to it.
+    expect(calls.indexOf(del[0])).toBeGreaterThan(calls.findIndex(c => c.url.endsWith('/workspaces')));
+  });
+
+  it('a workspace created with no starter proposal has nothing removed', () => {
+    expect(provision({ NO_STARTER: '1' }).calls.some(c => c.method === 'DELETE')).toBe(false);
+  });
+
   it('production needs no session: with no EMAIL no sign-in is attempted', () => {
     expect(provision().calls.some(c => c.url.includes('/auth/sign-in'))).toBe(false);
   });

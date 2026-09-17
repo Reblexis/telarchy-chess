@@ -101,6 +101,10 @@ set by the owner as the metric's `marketTitle`, verbatim: **"What score
 will I reach this game?"**, so the floor never composes one with a clock
 time in it.
 
+**Provisioning removes the platform's starter proposal** (the one every new
+workspace is created with, named by `starterProposalId` in the creation
+answer): the floor carries move proposals and nothing else.
+
 **The move question and the floor's text are set at provisioning**, so a
 floor made again reads the same. The workspace's option question
 (`optionQuestionTemplate`), verbatim: **"If the move {option} is made, what
@@ -112,10 +116,11 @@ priced on, the highest price played two seconds before the deadline with the
 rest voided and refunded, a tie random, every open book settled at the result,
 then a link to [How to trade with a bot](trading.md).
 
-**One book per game.** When a game starts, the operator first posts a
-reading of 50 (no result yet), so the game's main book, and every option
-book anchored to it, opens at the middle and never at the last game's
-result. Then it sets the metric's only horizon to `until-settled`, with
+**One book per game.** The score has a value only when a game has finished:
+100, 50 or 0, read from the finished state. While a game runs the metric
+stays at the last game's result; the operator posts no reading at the
+start, and 50 appears only after a draw. When a game starts it sets the
+metric's only horizon to `until-settled`, with
 `horizonTitles: { "until-settled": "when the game ends" }`, and forces the
 workspace's market refresh. Every proposal of the game is priced on that
 book. In date customization this is "When I settle it" with a custom title;
