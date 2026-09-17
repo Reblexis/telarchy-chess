@@ -171,17 +171,17 @@ describe('the Lichess client', () => {
   });
   it('the account reads the classical rating, whether it is provisional, and the game counts', async () => {
     const { f } = fakeFetch(() => ({
-      body: { username: 'TelarchyBot', url: 'https://lichess.org/@/TelarchyBot', perfs: { classical: { rating: 1720, prov: true } }, count: { all: 12, win: 3, loss: 8, draw: 1 } },
+      body: { username: 'TelarchyRookie', url: 'https://lichess.org/@/TelarchyRookie', perfs: { classical: { rating: 1720, prov: true } }, count: { all: 12, win: 3, loss: 8, draw: 1 } },
     }));
     expect(await new HttpLichessClient('tok', f).account()).toEqual({
-      username: 'TelarchyBot', url: 'https://lichess.org/@/TelarchyBot', rating: 1720, provisional: true,
+      username: 'TelarchyRookie', url: 'https://lichess.org/@/TelarchyRookie', rating: 1720, provisional: true,
       games: { played: 12, won: 3, lost: 8, drawn: 1 },
     });
   });
   it('an account with no classical games yet is 1500 provisional with zero counts', async () => {
-    const { f } = fakeFetch(() => ({ body: { username: 'TelarchyBot', perfs: {} } }));
+    const { f } = fakeFetch(() => ({ body: { username: 'TelarchyRookie', perfs: {} } }));
     expect(await new HttpLichessClient('tok', f).account()).toEqual({
-      username: 'TelarchyBot', url: 'https://lichess.org/@/TelarchyBot', rating: 1500, provisional: true,
+      username: 'TelarchyRookie', url: 'https://lichess.org/@/TelarchyRookie', rating: 1500, provisional: true,
       games: { played: 0, won: 0, lost: 0, drawn: 0 },
     });
   });

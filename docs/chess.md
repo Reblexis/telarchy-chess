@@ -19,7 +19,7 @@ Everything below is the contract. Internals are free within it.
 
 ## The player
 
-- One Lichess BOT account, **TelarchyBot**, upgraded through the Bot API
+- One Lichess BOT account, **TelarchyRookie**, upgraded through the Bot API
   (irreversible, which is why it is the only account). It plays standard
   chess only and **one game at a time**, because every move of a game is a
   market. No engine runs anywhere in this service.
@@ -88,13 +88,13 @@ operator account: the participant **`chess-operator`** (nickname **`Rookie`**,
 the bot's name on Telarchy, where every proposal shows it as the proposer;
 its owner Viktor's account), the way `snake-operator` owns the Snake. The
 workspace keeps the name `Chess`, and the Lichess account stays
-TelarchyBot. Every
+TelarchyRookie. Every
 proposal, reading and settlement on the floor is that account's; no person's
 name is on them, **muted** (`notificationsMuted` on) like the snake, with
 no charter, and closed to outside proposals (`externalProposalsDisabled`)
 where the store supports it.
 
-One metric, **Game score**: TelarchyBot's result in the current game from
+One metric, **Game score**: TelarchyRookie's result in the current game from
 its own side, **100 for a win, 50 for a draw, 0 for a loss** (an aborted
 game has no result and settles nothing). Range 0 to 100. Its question is
 set by the owner as the metric's `marketTitle`, verbatim: **"What score
@@ -136,7 +136,7 @@ books is the only thing that draws it down.
 
 ## The move
 
-When Lichess says it is TelarchyBot's turn:
+When Lichess says it is TelarchyRookie's turn:
 
 - **One legal move**: it is played at once, no proposal, recorded as
   `forced`.
@@ -317,7 +317,7 @@ These tests are started by a person and by nothing else: they are not part of
 
 ## What must hold
 
-- Every move TelarchyBot plays with two or more legal moves available is
+- Every move TelarchyRookie plays with two or more legal moves available is
   either the chosen option of that move's proposal or a random legal move
   recorded with its kind and reason.
 - One proposal per turn, never two open at once, and its options are

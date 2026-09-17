@@ -17,4 +17,4 @@ While the bot is to move, look at the arrows on the board and the list of moves 
 - pointing at a move in the list showed you that move on the board
 
 ## For the reviewer
-Right: the number is the market's expected game score for TelarchyBot if that move is played, on 0 to 100 (100 win, 50 draw, 0 loss). The highest-priced move is played when the countdown ends; a tie is broken at random. "Probability the move is played" or "engine evaluation" is a misunderstanding; treat that YES as a NO.
+Right: the number is the market's expected game score for TelarchyRookie if that move is played, on 0 to 100 (100 win, 50 draw, 0 loss). The highest-priced move is played when the countdown ends; a tie is broken at random. "Probability the move is played" or "engine evaluation" is a misunderstanding; treat that YES as a NO.

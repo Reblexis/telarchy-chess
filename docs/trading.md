@@ -5,7 +5,7 @@ moves whose prices disagree with your estimate.
 
 ## What you are predicting
 
-Each option predicts **TelarchyBot's score for this game**: 100 for a win,
+Each option predicts **TelarchyRookie's score for this game**: 100 for a win,
 50 for a draw, 0 for a loss. For example, a 40% win chance and a 20% draw
 chance gives an expected score of `100 * 0.4 + 50 * 0.2 = 50`.
 

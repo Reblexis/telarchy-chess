@@ -21,7 +21,7 @@ if (!KEY && !SESSION_EMAIL) throw new Error('set TELARCHY_API_KEY or TELARCHY_SE
 const STATE = env('STATE_FILE', 'state/chess.json');
 const PORT = Number(env('PORT', '8803'));
 const LICHESS_TOKEN = env('LICHESS_TOKEN');
-const USERNAME = env('LICHESS_USERNAME', 'TelarchyBot');
+const USERNAME = env('LICHESS_USERNAME', 'TelarchyRookie');
 const SEEK = env('SEEK', 'on') !== 'off';
 const WS = env('TELARCHY_WORKSPACE_ID');
 
