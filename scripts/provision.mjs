@@ -44,6 +44,12 @@ const ws = await call('POST', '/workspaces', { name: 'Chess', visibility: 'publi
 const wsId = ws.id;
 const slug = ws.slug;
 
+// docs/chess.md "The workspace": the floor carries move proposals and nothing else.
+if (ws.starterProposalId) {
+  console.error('# removing the starter proposal');
+  await call('DELETE', `/proposals/${ws.starterProposalId}`, undefined, wsId);
+}
+
 // A placeholder cell a day out; the operator replaces it with each game's own cell.
 const cell = new Date(Date.now() + 24 * 3600_000).toISOString().slice(0, 16);
 console.error('# creating metric Game score');

@@ -239,9 +239,6 @@ export class Operator {
       this.challengeOut = null;
       this.idleSince = null;
       this.remember(opp.id ?? opp.name ?? '');
-      // docs/chess.md "One book per game": no result yet reads 50, before the
-      // cell is set, so the new books never open at the last game's result.
-      try { await this.telarchy.postReading(50, now); } catch (e) { console.error(`reading 50: ${(e as Error).message}`); }
       // docs/chess.md "One book per game": a refusal is logged; the moves
       // still run on whatever book exists (the undecided path covers none).
       try { await this.telarchy.setHorizon(cell); } catch (e) { console.error(`set horizon ${cell}: ${(e as Error).message}`); }

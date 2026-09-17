@@ -106,18 +106,13 @@ describe('challenges', () => {
 });
 
 describe('a game opens its book', () => {
-  it('a new game posts a reading of 50 before setting its cell, so its books never open at the last result', async () => {
-    const f = fakes();
-    await operator(f).onGameFull(full('black'), T0);
-    expect(f.of('postReading')).toEqual([{ name: 'postReading', args: [50, T0.toISOString()] }]);
-    expect(f.names().indexOf('postReading')).toBeLessThan(f.names().indexOf('setHorizon'));
-  });
-  it('the same game reported again posts no reading', async () => {
+  it('THE SCORE HAS A VALUE ONLY WHEN A GAME HAS FINISHED: a new game posts no reading, never a 50', async () => {
     const f = fakes();
     const op = operator(f);
     await op.onGameFull(full('black'), T0);
     await op.onGameFull(full('black'), at(30));
-    expect(f.of('postReading')).toHaveLength(1);
+    expect(f.of('postReading')).toEqual([]);
+    expect(f.names()).toContain('setHorizon');
   });
   it('the start sets the metric horizon to the cell 24 hours out and refreshes the books', async () => {
     const f = fakes();
@@ -318,7 +313,7 @@ describe('the end settles the game, before anything else starts', () => {
     await op.onGameFull(full('black'), T0);
     await op.onGameState(st('', { status: 'aborted' }), at(40));
     expect(f.of('settleMetric')).toHaveLength(0);
-    expect(f.of('postReading').map(c => c.args[0])).toEqual([50]); // only the game's opening reading
+    expect(f.of('postReading')).toEqual([]); // an aborted game has no score
   });
   it('a refused settlement blocks every new game and is retried each minute until it goes through', async () => {
     const f = fakes({ settleFailures: 2 });
