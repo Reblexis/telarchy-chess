@@ -54,7 +54,7 @@ const metric = await call('POST', '/metrics', {
   value: 50,
   marketRangeMin: 0,
   marketRangeMax: 100,
-  timePreference: { enabled: false, customHorizons: [cell], horizonCredits: { [cell]: { book: 3000, proposal: 1000 } } },
+  timePreference: { enabled: false, customHorizons: [cell], horizonCredits: { [cell]: { book: 6000, proposal: 2000 } } },
 }, wsId);
 
 // The floor's question, in the owner's words (docs/chess.md, "The workspace").

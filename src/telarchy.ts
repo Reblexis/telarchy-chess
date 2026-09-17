@@ -24,8 +24,8 @@ export interface TelarchyOptions {
 }
 
 /** docs/chess.md "Liquidity": the main book and each option book. */
-export const MAIN_BOOK_CREDITS = 3000;
-export const OPTION_BOOK_CREDITS = 1000;
+export const MAIN_BOOK_CREDITS = 6000;
+export const OPTION_BOOK_CREDITS = 2000;
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
