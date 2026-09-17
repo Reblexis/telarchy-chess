@@ -23,17 +23,21 @@ test`, not CI, not a hook, not a timer. A person names the tests to run:
 
 Before a run:
 
-- The floor is on the beta store, behind a sign-in. Sign the VM's browser in
+- The floor is public on production (`https://telarchy.com/chess`), so the
+  tests run signed out, as a visitor sees it. Only
+  `trader-sees-a-bet-move-the-price` needs a session: sign the VM's browser in
   once, in the profile the tester uses (`chromium --user-data-dir=/tmp/codex-run`,
-  through `vm-desktop`), with an account that may open `/beta`, and leave it
-  open for a minute before closing it: Chromium saves its cookies every 30
-  seconds, and a browser closed sooner comes back signed out. Each test's
-  `setup` line says what it needs; `trader-sees-a-bet-move-the-price` also
-  needs 100 credits and is the only test that spends anything (10 credits).
+  credentials pasted through `deskctl browser-run --secret`, never typed), with
+  a test account holding 100 credits, and leave the browser open for a minute
+  before closing it: Chromium saves its cookies every 30 seconds, and a
+  browser closed sooner comes back signed out. It is the only test that spends
+  anything (10 credits).
 - Most tests need a game in progress.
   `curl -s https://chess.167-233-147-90.nip.io/state | jq .phase` should say
   `our-move` or `their-move`; `seeking`, `paused` or `settling` means wait.
-- When the floor moves to production, run with `-u https://telarchy.com/chess`.
+- To test a branch before it is published, run with
+  `-u "https://telarchy.com/beta/chess"` on a VM signed in with the staff
+  account, and tell the tester in the run's notes to ignore the staff controls.
 
 After a run, commit the results directory. Wherever a test has a "For the
 reviewer" section, read the sentence the tester wrote against it: a YES built
