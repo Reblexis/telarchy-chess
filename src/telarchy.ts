@@ -1,6 +1,6 @@
 // The Telarchy client the chess operator uses (docs/chess.md, "The workspace"
 // and "The move"). Deliberately has no trade method: the operator never trades.
-import type { Prices, ProposalRef, TelarchyClient } from './operator.js';
+import type { Activity, Prices, ProposalRef, RawTrade, TelarchyClient } from './operator.js';
 import type { MoveOption } from './rules.js';
 
 export interface SessionAuth {
@@ -127,6 +127,44 @@ export class HttpTelarchyClient implements TelarchyClient {
       out[o.id] = { price: num(o.consensus), lead: num(o.delta), marketId: typeof o.marketId === 'string' ? o.marketId : undefined };
     }
     return out;
+  }
+
+  /** A public read: no key, no session, GET only. */
+  private async publicGet(path: string): Promise<any> {
+    const res = await this.request(`${this.o.baseUrl}${path}`, { method: 'GET', headers: { Accept: 'application/json' } }, 'read');
+    if (!res.ok) throw new Error(`GET ${path.split('?')[0]} -> ${res.status}`);
+    return res.json();
+  }
+
+  /** docs/chess.md "The feed", `call` and `recentTrades`: the floor's payload
+   *  names the metric's main book, its history is the call, and the public
+   *  actions log carries every trade on the floor's books. Reads only. */
+  async readActivity(): Promise<Activity> {
+    const ws = encodeURIComponent(this.o.workspaceId);
+    const [floor, log] = await Promise.all([
+      this.publicGet(`/marketplace/${ws}`),
+      this.publicGet(`/data-room/actions?workspace=${ws}&kinds=trade&limit=50`),
+    ]);
+    const book = (Array.isArray(floor?.markets) ? floor.markets : []).find((m: any) => m?.metricId === this.o.metricId && typeof m?.marketId === 'string');
+    let call: Activity['call'] = null;
+    if (book) {
+      const h = await this.publicGet(`/marketplace/${ws}/markets/${encodeURIComponent(book.marketId)}/history`);
+      const history = (Array.isArray(h?.history) ? h.history : [])
+        .filter((p: any) => typeof p?.at === 'string' && Number.isFinite(Date.parse(p.at)) && num(p?.consensus) !== null)
+        .map((p: any) => ({ at: p.at as string, value: p.consensus as number }));
+      call = { marketId: book.marketId, value: num(book.consensus), history };
+    }
+    const trades: RawTrade[] = [];
+    for (const r of Array.isArray(log?.rows) ? log.rows : []) {
+      const d = r?.detail;
+      if (r?.kind !== 'trade' || typeof r?.id !== 'string' || typeof r?.at !== 'string' || typeof d?.marketId !== 'string') continue;
+      trades.push({
+        id: r.id, at: r.at, handle: String(r.actor?.handle ?? r.actor?.id ?? '?'),
+        side: d.side === 'sell' ? 'sell' : 'buy', direction: d.direction === 'lower' ? 'lower' : 'higher',
+        credits: num(d.cost) ?? 0, marketId: d.marketId, price: num(d.callAfter),
+      });
+    }
+    return { call, trades };
   }
 
   async approveOption(ref: ProposalRef, option: string): Promise<void> {

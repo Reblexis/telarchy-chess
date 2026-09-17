@@ -26,7 +26,15 @@ export type Prices = Record<string, { price: number | null; lead: number | null;
 
 /** The Telarchy calls the operator makes. Deliberately no trade method:
  *  docs/chess.md, "The operator account never trades." */
+/** docs/chess.md "The feed", `call` and `recentTrades`, as the client reads them. */
+export interface RawTrade { id: string; at: string; handle: string; side: 'buy' | 'sell'; direction: 'higher' | 'lower'; credits: number; marketId: string; price: number | null }
+export interface CallRecord { marketId: string | null; value: number | null; history: Array<{ at: string; value: number }> }
+export interface Activity { call: CallRecord | null; trades: RawTrade[] }
+export interface TradeRecord { id: string; at: string; handle: string; side: 'buy' | 'sell'; direction: 'higher' | 'lower'; credits: number; book: 'game' | 'move'; san: string | null; move: number | null; price: number | null }
+
 export interface TelarchyClient {
+  /** Public reads only, for the feed; optional, and never on the decision's path. */
+  readActivity?(): Promise<Activity>;
   setHorizon(cell: string): Promise<void>;
   refreshBooks(): Promise<void>;
   postProposal(title: string, description: string, decideBy: Date, options: MoveOption[]): Promise<ProposalRef>;
@@ -111,6 +119,10 @@ const RULE =
   'On my turn one proposal offers every legal move as an option, each priced by its own book on this game\'s score (100 a win, 50 a draw, 0 a loss). Two seconds before the deadline the option with the highest price is played; a tie is random among the tied, and no price at all plays a random legal move.';
 
 const POLL_EVERY_MS = 5_000;
+const ACTIVITY_EVERY_MS = 5_000;
+const ACTIVITY_TIMEOUT_MS = 8_000;
+const TRADES_KEPT = 20;
+const CALL_POINTS = 300;
 const POLL_TIMEOUT_MS = 10_000;
 const DECIDE_READ_MS = 2_000;
 const SETTLE_RETRY_MS = 60_000;
@@ -139,6 +151,13 @@ export class Operator {
   game: GameRecord | null = null;
   open: OpenMove | null = null;
   recentDecisions: DecisionRecord[] = [];
+  /** docs/chess.md "The feed": the game's main book and the trades on its books. */
+  call: CallRecord | null = null;
+  recentTrades: TradeRecord[] = [];
+  /** The option books of this game by market id, kept after their move is decided. */
+  private bookNames = new Map<string, { san: string; move: number }>();
+  private activityAt = 0;
+  private activityBusy = false;
   games: Array<Omit<GameRecord, 'moves' | 'clocks' | 'inc'> & { plies: number }> = [];
   settlement: Settlement | null = null;
   pendingDeclines: Array<{ ref: ProposalRef; nextTryAt: number }> = [];
@@ -215,6 +234,7 @@ export class Operator {
         startedAt: now.toISOString(), endedAt: null, cell,
       };
       this.games.push(this.summary(this.game));
+      this.call = null; this.recentTrades = []; this.bookNames = new Map(); this.activityAt = 0;
       this.challengeOut = null;
       this.idleSince = null;
       this.remember(opp.id ?? opp.name ?? '');
@@ -385,9 +405,51 @@ export class Operator {
       const q = await within(this.telarchy.readPrices(open.proposal, this.game?.cell ?? null), Math.min(POLL_TIMEOUT_MS, room));
       if (this.open !== open) return;
       open.quotes = { ...(open.quotes ?? {}), ...q };
+      this.nameBooks(open);
       open.quotesAt = now.toISOString();
     } catch {
       // keep the last prices: a failed read is not an empty book
+    }
+  }
+
+  private nameBooks(open: OpenMove): void {
+    for (const o of open.options) {
+      const id = open.quotes?.[o.id]?.marketId;
+      if (id) this.bookNames.set(id, { san: o.label, move: open.move });
+    }
+  }
+
+  /** docs/chess.md "The feed", `call` and `recentTrades`: on its own timer,
+   *  apart from the tick, so a slow read can never delay a decision. Reads
+   *  only. A failure keeps the last values. */
+  async pollActivity(now: Date): Promise<void> {
+    const g = this.game;
+    if (!this.telarchy.readActivity || !g || !this.running()) return;
+    if (this.activityBusy || now.getTime() - this.activityAt < ACTIVITY_EVERY_MS) return;
+    this.activityBusy = true;
+    this.activityAt = now.getTime();
+    try {
+      const a = await within(this.telarchy.readActivity(), ACTIVITY_TIMEOUT_MS);
+      if (this.game !== g) return;
+      if (a.call) this.call = { marketId: a.call.marketId, value: a.call.value, history: a.call.history.filter(p => p.at >= g.startedAt).slice(-CALL_POINTS) };
+      const main = a.call?.marketId ?? this.call?.marketId ?? null;
+      const rows: TradeRecord[] = [];
+      for (const t of a.trades) {
+        if (t.at < g.startedAt) continue;
+        const named = this.bookNames.get(t.marketId);
+        if (!named && t.marketId !== main) continue;
+        rows.push({
+          id: t.id, at: t.at, handle: t.handle, side: t.side, direction: t.direction, credits: t.credits,
+          book: named ? 'move' : 'game', san: named?.san ?? null, move: named?.move ?? null, price: t.price,
+        });
+      }
+      const seen = new Set(rows.map(r => r.id));
+      this.recentTrades = [...rows, ...this.recentTrades.filter(r => !seen.has(r.id))]
+        .sort((x, y) => (x.at < y.at ? 1 : x.at > y.at ? -1 : 0)).slice(0, TRADES_KEPT);
+    } catch {
+      // keep the last call and trades
+    } finally {
+      this.activityBusy = false;
     }
   }
 
@@ -397,6 +459,7 @@ export class Operator {
     try {
       quotes = await within(this.telarchy.readPrices(open.proposal, this.game?.cell ?? null), DECIDE_READ_MS);
       open.quotes = quotes;
+      this.nameBooks(open);
       open.quotesAt = now.toISOString();
     } catch {
       // the decision falls on the last polled prices
@@ -612,6 +675,8 @@ export class Operator {
       },
       cell: g?.cell ?? null,
       cellEndsAt: g && g.cell !== 'until-settled' ? new Date(Date.parse(`${g.cell}:00Z`) + 60_000).toISOString() : null,
+      call: this.call,
+      recentTrades: this.recentTrades,
       recentDecisions: this.recentDecisions,
       rules: {
         windowSeconds: { min: WINDOW.min, max: WINDOW.max, firstMove: WINDOW.firstMove },

@@ -266,6 +266,20 @@ listed is present; a value not known yet is `null`.
   saying why a price is missing (`not polled yet` before the first poll).
 - `cell`, `cellEndsAt`: the game's book. `cell` is `until-settled` and
   `cellEndsAt` is null for a game without a calendar deadline.
+- `call`: the game's main book, `{ marketId, value, history: [{ at, value }]
+  }`: the book's consensus now and after each trade since the game started,
+  oldest first, at most 300 points; null before the first read of a game and
+  between games.
+- `recentTrades`: the last 20 trades on this game's books, newest first,
+  `{ id, at, handle, side: "buy" | "sell", direction: "higher" | "lower",
+  credits, book: "game" | "move", san, move, price }`: `san` and `move` name
+  the option's move and its number when `book` is `move` (null for the main
+  book), `price` is that book's consensus after the trade. A trade on a book
+  the operator no longer knows (a move opened before a restart) is left out.
+  Both come from Telarchy's public reads (the actions log and the market's
+  history), read every 5 seconds while a game runs, on their own timer: a
+  slow or failed read keeps the last values and can never delay a move's
+  decision.
 - `recentDecisions`: the last 20, newest first, `{ game, move, at, chosen,
   san, price, tied, kind: "market" | "undecided" | "forced" | "clock",
   undecidedReason }`.
@@ -334,7 +348,9 @@ nothing is green, because the tie is broken at random.
 **The right column** (from x 736, 520 px wide), top to bottom:
 
 1. the Telarchy lockup, 18 px tall at its own aspect ratio;
-2. "Chess" in Fraunces 700 and the question "What score will I reach this game?" (the metric's own, above) in Fraunces 500, muted;
+2. "Chess" in Fraunces 700 with the question "What score will I reach this
+   game?" (the metric's own, above) beside it on the same line in Fraunces
+   500, muted;
 3. three cells between hairlines, each a small mono uppercase label over a
    large mono value: the player's name and rating over its clock, the
    opponent's name and rating over theirs (a name too long for its cell is
@@ -356,18 +372,39 @@ nothing is green, because the tie is broken at random.
 4. the player's record, one muted mono line: `RATING 1415? · PLAYED 10 ·
    WON 0 · LOST 10 · DRAWN 0` (`?` while provisional), absent while
    `player` is null;
-5. one panel of up to five rows between hairlines:
-   - while a move is open, **Top moves** with the number of legal moves at
-     the right: each option's SAN and price, highest first (ties in
-     proposal order, unpriced last), the leader's row green, and "+N more"
-     under the last row when more options exist;
-   - otherwise **Game N**: the game's moves as numbered pairs in SAN
-     (`12.  Nf3  d5`), newest first;
-6. at the foot the link alone: `telarchy.com/chess` in a bone (`#f2ecdc`)
-   pill, Inter 600. No other words invite the viewer anywhere.
+5. **the market's call**: the label `MARKET'S CALL` with the call now at
+   the right in the accent (one decimal), over a graph of `call.history`
+   ending at `call.value`: the line in the accent over a faint fill of it, a
+   dot on the newest point, hairlines at 25, 50 and 75 with 50 the brighter,
+   their values in small mono at the right. The vertical scale is always 0
+   to 100, the metric's own range, so a graph reads the same in every game.
+   Fewer than two points draw the level as a flat line. With no `call` the
+   graph is empty and the value reads `-`;
+6. **the leading moves**, three rows between hairlines:
+   - while a move is open, `LEADING MOVES` with the number of legal moves at
+     the right: the three highest-priced options (ties in proposal order,
+     unpriced last), each its rank, its SAN, a bar whose length is its price
+     within the three rows' range (the lowest a short stub, the highest the
+     full track), and its price. The leader's SAN, bar and price are green;
+     with a tie at the top nothing is green;
+   - otherwise `LAST DECISION`: the newest decision of this game as "Move 6:
+     O-O, chosen at 56.4 of 100" ("chosen at random" when its kind is not
+     `market` or it has no price), and under it who is thought about:
+     "Waiting for OppBot (2171) to reply", "Game over" once it has a result,
+     or, with no decision yet in this game, "Waiting for the first move";
+7. **the trades**, `TRADES` over up to five rows from `recentTrades`, newest
+   first: a small triangle (up and green when the trade pushed its book's
+   price up: a buy of higher or a sale of lower; down and red otherwise),
+   the handle, the move's SAN (or "game" in muted for the main book), the
+   credits as "120 cr" (rounded to a whole credit, "<1 cr" below one), and
+   the price after it in the triangle's colour. Older rows fade. A handle
+   too long for its cell is cut with an ellipsis. With none: "No trades yet
+   this game", muted;
+8. at the foot the link alone: `telarchy.com/chess` in a slim bone
+   (`#f2ecdc`) pill, Inter 600. No other words invite the viewer anywhere.
 
-With no game yet the column's cells read `-` and the panel says "Waiting
-for the first game".
+With no game yet the column's cells read `-` and the leading-moves panel
+says "Waiting for the first game".
 
 ## Operation
 
