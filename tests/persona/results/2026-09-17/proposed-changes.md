@@ -1,6 +1,8 @@
 # Proposed changes from the 2026-09-17 persona run
 
-A proposal, nothing here is built. Ordered by how much each one costs a real
+**Approved by Viktor 2026-09-17** ("ok go ahead regarding 12 do a"): everything
+below is to be built except 12, which stays as it is (option a). Status is at
+the end. When this was written nothing was built. Ordered by how much each one costs a real
 user, highest first. "Doc" names the governing doc whose sentence would
 change or already says it (telarchy-app `docs/ui-conventions.md` unless
 noted). Source reports are the files beside this one.
@@ -113,3 +115,26 @@ noted). Source reports are the files beside this one.
     change.
 25. Run the visitor and designer tests signed out once the floor is on
     production; the staff controls were visible in every screenshot.
+
+## Status, 2026-09-17 evening
+
+Built on telarchy-app branch `chess-floor-persona-fixes`, docs and tests first,
+2,184 frontend tests green, preview
+`https://telarchy.com/beta?branch=br-chess-floor-persona-fixes`. Not merged.
+
+- Done: 1 (floor between games), 2 (Back, plus chess links staying on /beta),
+  3 (note under the board on a proposal that is not the open move), 4 (guide
+  link under the bot door), 7 and 22 (who plays whom above the board, rank
+  labels, bigger coordinates), 8 (both last moves tinted), 9 (record headed),
+  10 (replay marker, "of 100"), 11 (scale heading on the move list), 13
+  (ticket counts down), part of 15 (a lasting "You bought Higher for 10 cr."
+  line; the amount is deliberately left filled in, repeat bettors on the
+  snake rely on it), 24 (this suite's hover instruction).
+- Left as is by decision: 12.
+- Not built yet: 5 and 6 (who decides, "Rookie approved" wording), 14 (your
+  position after a bet and after the decision), 16 (balance rose after a
+  spend), 17 ("How this decides" contradicts the closed page), 18 to 21
+  (board above the fold, 600 px stacking, Otto bubble, truncated labels), 23
+  (guides open at the top), 25 (signed-out rerun, waits for production). The
+  snake's arrow links have the same missing /beta prefix as chess had.
+- Rerun after publish: `vmtest run $(vmtest failing chess) -c claude`.
