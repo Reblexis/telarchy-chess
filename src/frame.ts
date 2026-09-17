@@ -59,7 +59,7 @@ export const COLUMN = { x: MARGIN + BOARD_PX + 40, w: WIDTH - (MARGIN + BOARD_PX
 const X = COLUMN.x;
 const W = COLUMN.w;
 const RIGHT = X + W;
-const LAYOUT = { statsTop: 164, statsBottom: 262, labelBaseline: 190, valueBaseline: 240, recordBaseline: 290, panelLabelBaseline: 330, rowsTop: 342, rowHeight: 44, moreBaseline: 590, linkTop: 612 } as const;
+const LAYOUT = { titleBaseline: 86, statsTop: 104, statsBottom: 188, labelBaseline: 128, valueBaseline: 172, recordBaseline: 208, callLabel: 232, graphTop: 240, graphH: 84, leadersLabel: 356, leaderTop: 366, leaderH: 34, tradesLabel: 496, tradesLine: 504, tradeBase: 528, tradeH: 27, linkTop: 660, linkH: 40 } as const;
 
 const FILES = 'abcdefgh';
 type Color = 'white' | 'black';
@@ -154,22 +154,58 @@ export function rankedMoves(s: any, n = 5): { rows: Array<{ san: string; price: 
 }
 
 /** The game's moves as numbered SAN pairs, newest first, stopping at the first move that does not play. */
-export function movePairs(moves: unknown, n = Infinity): Array<{ n: number; white: string; black: string | null }> {
-  const list: unknown[] = Array.isArray(moves) ? moves : [];
-  const chess = new Chess();
-  const sans: string[] = [];
-  for (const m of list) {
-    if (typeof m !== 'string' || !UCI.test(m)) break;
-    try {
-      sans.push(chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] }).san);
-    } catch { break; }
-  }
-  const pairs: Array<{ n: number; white: string; black: string | null }> = [];
-  for (let i = 0; i < sans.length; i += 2) pairs.push({ n: i / 2 + 1, white: sans[i], black: sans[i + 1] ?? null });
-  return pairs.reverse().slice(0, n);
+/** docs/chess.md "The stream", the leading moves: the three highest prices,
+ *  each with a bar within their own range (the lowest a stub, the highest full). */
+export function leaderRows(s: any): Array<{ san: string; price: number | null; leader: boolean; bar: number }> {
+  if (s?.phase !== 'our-move' || !s?.open) return [];
+  const rows = rankedMoves(s, 3).rows;
+  const prices = rows.map(r => r.price).filter((p): p is number => p !== null);
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  return rows.map(r => ({ ...r, bar: r.price === null ? 0 : hi > lo ? 0.12 + 0.88 * ((r.price - lo) / (hi - lo)) : 1 }));
 }
 
-/** A clock: m:ss, h:mm:ss from an hour, never below 0:00. */
+/** The newest decision of this game and who is thought about, for the panel while no move is open. */
+export function lastDecisionLines(s: any): [string, string] {
+  const g = s?.game && typeof s.game === 'object' ? s.game : null;
+  const d = (Array.isArray(s?.recentDecisions) ? s.recentDecisions : []).find((x: any) => x && isNum(g?.number) && x.game === g.number);
+  const first = d && typeof d.san === 'string'
+    ? `Move ${isNum(d.move) ? d.move : '?'}: ${d.san}, ${d.kind === 'market' && isNum(d.price) ? `chosen at ${d.price.toFixed(1)} of 100` : 'chosen at random'}`
+    : 'Waiting for the first move';
+  const opp = g?.opponent && typeof g.opponent === 'object' ? g.opponent : null;
+  const who = `${typeof opp?.name === 'string' ? opp.name : 'the opponent'}${isNum(opp?.rating) ? ` (${opp.rating})` : ''}`;
+  return [first, ended(g) ? 'Game over' : `Waiting for ${who} to reply`];
+}
+
+/** The main book's call: its history ending at the value now, held inside 0 to 100. */
+export function callSeries(s: any): { value: number | null; points: number[] } {
+  const c = s?.call && typeof s.call === 'object' ? s.call : null;
+  if (!c) return { value: null, points: [] };
+  const hold = (v: number) => Math.max(0, Math.min(100, v));
+  const points = (Array.isArray(c.history) ? c.history : []).filter((p: any) => isNum(p?.value)).map((p: any) => hold(p.value));
+  const value = isNum(c.value) ? hold(c.value) : null;
+  if (value !== null) points.push(value);
+  return { value, points };
+}
+
+/** Up to `n` trades as the column writes them. */
+export function tradeRows(s: any, n = 5): Array<{ up: boolean; handle: string; what: string; game: boolean; credits: string; price: string }> {
+  const out: Array<{ up: boolean; handle: string; what: string; game: boolean; credits: string; price: string }> = [];
+  for (const t of Array.isArray(s?.recentTrades) ? s.recentTrades : []) {
+    if (out.length >= n) break;
+    if (!t || typeof t !== 'object' || typeof t.handle !== 'string') continue;
+    const game = t.book !== 'move' || typeof t.san !== 'string';
+    const credits = isNum(t.credits) ? t.credits : 0;
+    out.push({
+      // a buy of higher or a sale of lower pushes the book's price up
+      up: (t.side === 'sell') !== (t.direction === 'higher'),
+      handle: t.handle, what: game ? 'game' : t.san, game,
+      credits: credits > 0 && credits < 1 ? '<1 cr' : `${Math.round(credits)} cr`,
+      price: isNum(t.price) ? t.price.toFixed(1) : '-',
+    });
+  }
+  return out;
+}
+
 export function clockText(ms: number): string {
   const secs = Math.floor((isNum(ms) && ms > 0 ? ms : 0) / 1000);
   const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), ss = String(secs % 60).padStart(2, '0');
@@ -282,8 +318,8 @@ function draw(s: any, now: number, items: DrawnItem[]): Canvas {
 
   // the link, first, so it is there whatever else fails to draw
   ctx.fillStyle = BONE;
-  ctx.beginPath(); ctx.roundRect(X, LAYOUT.linkTop, W, 84, 42); ctx.fill();
-  text(LINK_TEXT, X + W / 2, 668, 40, BG, 600, 'sans', 'center');
+  ctx.beginPath(); ctx.roundRect(X, LAYOUT.linkTop, W, LAYOUT.linkH, LAYOUT.linkH / 2); ctx.fill();
+  text(LINK_TEXT, X + W / 2, LAYOUT.linkTop + 28, 22, BG, 600, 'sans', 'center');
 
   if (!isDrawableState(s)) {
     text('Waiting for the feed', X, 120, 34, MUTE, 600, 'sans');
@@ -298,8 +334,9 @@ function draw(s: any, now: number, items: DrawnItem[]): Canvas {
   if (LOGO_NATURAL.w > 0) ctx.drawImage(logo, X, 28, (LOGO_H * LOGO_NATURAL.w) / LOGO_NATURAL.h, LOGO_H);
 
   // 2. the name and the question
-  text('Chess', X, 108, 44, FG, 700, 'serif');
-  text(QUESTION, X, 140, 22, FG2, 500, 'serif');
+  text('Chess', X, LAYOUT.titleBaseline, 38, FG, 700, 'serif');
+  const titleW = measure('Chess', 38, 700, 'serif');
+  text(clip(QUESTION, 17, W - titleW - 14, 500, 'serif'), X + titleW + 14, LAYOUT.titleBaseline, 17, FG2, 500, 'serif');
 
   // 3. three cells: our clock, their clock, the state of the move
   const third = W / 3;
@@ -317,7 +354,7 @@ function draw(s: any, now: number, items: DrawnItem[]): Canvas {
   const theirColor: Color = color === 'white' ? 'black' : 'white';
   const clockValue = (i: number, side: Color) => {
     const v = clocks[side];
-    text(v === null ? '-' : clockText(v), cellX(i), LAYOUT.valueBaseline, 36, clocks.ticking === side ? FG : FG2, 600, 'mono');
+    text(v === null ? '-' : clockText(v), cellX(i), LAYOUT.valueBaseline, 32, clocks.ticking === side ? FG : FG2, 600, 'mono');
   };
   label(ours, cellX(0), LAYOUT.labelBaseline, cellW(0));
   clockValue(0, color);
@@ -326,40 +363,85 @@ function draw(s: any, now: number, items: DrawnItem[]): Canvas {
   const cell = nextCell(s, now);
   label(cell.label, cellX(2), LAYOUT.labelBaseline, cellW(2));
   const big = /^[\d:-]+$/.test(cell.value);
-  text(cell.value, cellX(2), big ? LAYOUT.valueBaseline : LAYOUT.valueBaseline - 4, big ? 36 : 26, TONE[cell.tone], 600, 'mono');
+  text(cell.value, cellX(2), big ? LAYOUT.valueBaseline : LAYOUT.valueBaseline - 3, big ? 32 : 24, TONE[cell.tone], 600, 'mono');
 
   // 4. the record
   const record = recordLine(p);
-  if (record) text(clip(record, 13, W, 500, 'mono', 1), X, LAYOUT.recordBaseline, 13, MUTE, 500, 'mono', 'left', 1);
+  if (record) text(clip(record, 12, W, 500, 'mono', 1), X, LAYOUT.recordBaseline, 12, MUTE, 500, 'mono', 'left', 1);
 
-  // 5. the panel
-  const rowTop = (i: number) => LAYOUT.rowsTop + i * LAYOUT.rowHeight;
-  const rowBase = (i: number) => rowTop(i) + 30;
-  if (!g) {
-    text('Waiting for the first game', X, rowBase(0), 20, FG2, 400, 'sans');
-  } else if (s.phase === 'our-move' && s.open) {
-    const r = rankedMoves(s);
-    label('Top moves', X, LAYOUT.panelLabelBaseline, W / 2);
-    label(`${r.legal} legal`, RIGHT, LAYOUT.panelLabelBaseline, W / 2, 'right');
-    r.rows.forEach((row, i) => {
-      hairline(X, rowTop(i), RIGHT, rowTop(i));
-      const tone = row.leader ? GREEN : FG;
-      text(String(i + 1), X, rowBase(i), 15, MUTE, 500, 'mono');
-      const price = row.price === null ? '-' : row.price.toFixed(1);
-      const priceW = measure(price, 22, 600, 'mono');
-      text(price, RIGHT, rowBase(i), 22, row.leader ? GREEN : FG2, 600, 'mono', 'right');
-      text(clip(row.san, 22, RIGHT - priceW - 16 - (X + 36), 600, 'sans'), X + 36, rowBase(i), 22, tone, 600, 'sans');
-    });
-    if (r.more > 0) text(`+${r.more} more`, X + 36, LAYOUT.moreBaseline, 15, MUTE, 400, 'sans');
-  } else {
-    label(`Game ${isNum(g.number) ? g.number : ''}`.trim(), X, LAYOUT.panelLabelBaseline, W);
-    movePairs(g.moves, 5).forEach((pair, i) => {
-      hairline(X, rowTop(i), RIGHT, rowTop(i));
-      text(`${pair.n}.`, X, rowBase(i), 15, MUTE, 500, 'mono');
-      text(clip(pair.white, 22, 150, 600, 'sans'), X + 64, rowBase(i), 22, FG, 600, 'sans');
-      if (pair.black) text(clip(pair.black, 22, 150, 600, 'sans'), X + 240, rowBase(i), 22, FG, 600, 'sans');
-    });
+  // 5. the market's call: the main book over the game, always 0 to 100
+  const call = callSeries(s);
+  label("Market's call", X, LAYOUT.callLabel, W / 2);
+  text(call.value === null ? '-' : call.value.toFixed(1), RIGHT, LAYOUT.callLabel + 2, 20, call.value === null ? MUTE : ACCENT, 600, 'mono', 'right');
+  const gx = X, gw = W - 40, gTop = LAYOUT.graphTop, gH = LAYOUT.graphH;
+  const gy = (v: number) => gTop + gH - (v / 100) * gH;
+  for (const v of [25, 50, 75]) {
+    ctx.strokeStyle = v === 50 ? '#3d3d49' : LINE; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(gx, Math.round(gy(v)) + 0.5); ctx.lineTo(gx + gw, Math.round(gy(v)) + 0.5); ctx.stroke();
+    text(String(v), RIGHT, gy(v) + 4, 11, COORD, 500, 'mono', 'right');
   }
+  if (call.points.length > 0) {
+    const pts = call.points.length === 1 ? [call.points[0], call.points[0]] : call.points;
+    const gxAt = (i: number) => gx + (i / (pts.length - 1)) * gw;
+    ctx.beginPath(); ctx.moveTo(gxAt(0), gy(pts[0]));
+    pts.forEach((v, i) => { if (i) ctx.lineTo(gxAt(i), gy(v)); });
+    ctx.save();
+    ctx.lineTo(gx + gw, gTop + gH); ctx.lineTo(gx, gTop + gH); ctx.closePath();
+    ctx.globalAlpha = 0.1; ctx.fillStyle = ACCENT; ctx.fill();
+    ctx.restore();
+    ctx.beginPath(); ctx.moveTo(gxAt(0), gy(pts[0]));
+    pts.forEach((v, i) => { if (i) ctx.lineTo(gxAt(i), gy(v)); });
+    ctx.strokeStyle = ACCENT; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.fillStyle = ACCENT; ctx.beginPath(); ctx.arc(gx + gw, gy(pts[pts.length - 1]), 4.5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 6. the leading moves, or the last decision
+  const lTop = (i: number) => LAYOUT.leaderTop + i * LAYOUT.leaderH;
+  const lBase = (i: number) => lTop(i) + 24;
+  if (!g) {
+    text('Waiting for the first game', X, lBase(0), 20, FG2, 400, 'sans');
+  } else if (s.phase === 'our-move' && s.open) {
+    label('Leading moves', X, LAYOUT.leadersLabel, W / 2);
+    label(`${rankedMoves(s).legal} legal`, RIGHT, LAYOUT.leadersLabel, W / 2, 'right');
+    const barX = X + 150, barW = 250;
+    leaderRows(s).forEach((row, i) => {
+      hairline(X, lTop(i), RIGHT, lTop(i));
+      text(String(i + 1), X, lBase(i), 13, MUTE, 500, 'mono');
+      text(clip(row.san, 20, barX - 12 - (X + 28), 600, 'sans'), X + 28, lBase(i), 20, row.leader ? GREEN : FG, 600, 'sans');
+      if (row.bar > 0) {
+        ctx.save(); ctx.globalAlpha = row.leader ? 1 : 0.6; ctx.fillStyle = row.leader ? GREEN : ACCENT;
+        ctx.beginPath(); ctx.roundRect(barX, lBase(i) - 11, Math.max(6, barW * row.bar), 6, 3); ctx.fill(); ctx.restore();
+      }
+      text(row.price === null ? '-' : row.price.toFixed(1), RIGHT, lBase(i), 20, row.leader ? GREEN : FG2, 600, 'mono', 'right');
+    });
+  } else {
+    label('Last decision', X, LAYOUT.leadersLabel, W);
+    hairline(X, lTop(0), RIGHT, lTop(0));
+    const [chosen, waiting] = lastDecisionLines(s);
+    text(clip(chosen, 20, W, 600, 'sans'), X, lBase(0) + 6, 20, FG, 600, 'sans');
+    text(clip(waiting, 15, W, 400, 'sans'), X, lBase(1) + 2, 15, FG2, 400, 'sans');
+  }
+
+  // 7. the trades, newest first, older rows fading
+  label('Trades', X, LAYOUT.tradesLabel, W);
+  hairline(X, LAYOUT.tradesLine, RIGHT, LAYOUT.tradesLine);
+  const trades = g ? tradeRows(s) : [];
+  if (trades.length === 0) text('No trades yet this game', X, LAYOUT.tradeBase, 15, FG2, 400, 'sans');
+  trades.forEach((t, i) => {
+    const y = LAYOUT.tradeBase + i * LAYOUT.tradeH;
+    const tone = t.up ? GREEN : RED;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.45, 1 - i * 0.12);
+    ctx.fillStyle = tone; ctx.beginPath();
+    if (t.up) { ctx.moveTo(X, y); ctx.lineTo(X + 12, y); ctx.lineTo(X + 6, y - 10); }
+    else { ctx.moveTo(X, y - 10); ctx.lineTo(X + 12, y - 10); ctx.lineTo(X + 6, y); }
+    ctx.closePath(); ctx.fill();
+    text(clip(t.handle, 15, 196, 500, 'mono'), X + 22, y, 15, FG, 500, 'mono');
+    text(clip(t.what, 15, 96, 600, 'mono'), X + 232, y, 15, t.game ? MUTE : FG, 600, 'mono');
+    text(clip(t.credits, 15, 100, 500, 'mono'), RIGHT - 76, y, 15, FG2, 500, 'mono', 'right');
+    text(t.price, RIGHT, y, 15, tone, 600, 'mono', 'right');
+    ctx.restore();
+  });
   return canvas;
 }
 
