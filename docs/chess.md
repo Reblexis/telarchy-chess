@@ -310,7 +310,7 @@ the frame reads nothing from the system or the network. Every line is
 readable at 720p and no text runs past the frame or out of its column.
 
 **The board** fills the frame's height on the left (x 24, y 24, 84 px
-squares), seen from TelarchyBot's side: white at the bottom when
+squares), seen from TelarchyRookie's side: white at the bottom when
 `game.color` is white, black otherwise. a1 is a dark square. The squares
 use the floor's tones (light `#efe8d6`, dark `#d6ccb2`; the two squares of
 the last move in `game.moves` tinted `#e6d28a` light, `#d2bb6a` dark), file
@@ -332,8 +332,7 @@ nothing is green, because the tie is broken at random.
 **The right column** (from x 736, 520 px wide), top to bottom:
 
 1. the Telarchy lockup, 18 px tall at its own aspect ratio;
-2. "Chess" in Fraunces 700 and the question "What will I score in this
-   game?" in Fraunces 500, muted;
+2. "Chess" in Fraunces 700 and the question "What score will I reach this game?" (the metric's own, above) in Fraunces 500, muted;
 3. three cells between hairlines, each a small mono uppercase label over a
    large mono value: the player's name and rating over its clock, the
    opponent's name and rating over theirs (a name too long for its cell is
@@ -347,7 +346,7 @@ nothing is green, because the tie is broken at random.
 
    Clocks read `m:ss`, `h:mm:ss` from an hour, never below `0:00`. The
    clock of the side to move counts down by the second from the moment the
-   feed's clocks were last true: `open.openedAt` for TelarchyBot's clock
+   feed's clocks were last true: `open.openedAt` for TelarchyRookie's clock
    while a move is open, the newest `recentDecisions` entry of this game for
    the opponent's while they think. Without that moment (the opponent's
    first move before we have moved) and once the game has ended, both clocks
