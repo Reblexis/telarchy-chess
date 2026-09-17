@@ -291,16 +291,16 @@ describe('the end settles the game, before anything else starts', () => {
     expect(f.of('settleMetric')).toEqual([{ name: 'settleMetric', args: [100, at(90).toISOString(), 'Game 1 vs OppBot: win'] }]);
     expect(op.publicState(at(91)).phase).toBe('seeking');
   });
-  it('THE NEXT GAME\'S BOOK OPENS AT THE PLAYER\'S AVERAGE SCORE: set before the reading and the settlement', async () => {
+  it('EVERY GAME\'S BOOK OPENS AT 50, WHATEVER THE LAST RESULT: set before the reading and the settlement', async () => {
     const f = fakes();
     const op = operator(f);
     await op.onGameFull(full('black'), T0);
     await op.onGameState(st('f2f3 e7e5 g2g4 d8h4', { status: 'mate', winner: 'black' }), at(90));
-    expect(f.of('setOpensAt')).toEqual([{ name: 'setOpensAt', args: [100] }]);
+    expect(f.of('setOpensAt')).toEqual([{ name: 'setOpensAt', args: [50] }]);
     expect(f.names().indexOf('setOpensAt')).toBeLessThan(f.names().indexOf('postReading'));
     expect(f.names().indexOf('setOpensAt')).toBeLessThan(f.names().indexOf('settleMetric'));
   });
-  it('the average runs over every finished game, this one included, to one decimal; an aborted game does not count', async () => {
+  it('it is 50 after a win and after every loss, never an average; an aborted game sets nothing', async () => {
     const f = fakes();
     const op = operator(f);
     await op.onGameFull(full('black'), T0);
@@ -311,7 +311,7 @@ describe('the end settles the game, before anything else starts', () => {
     await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(330)); // 0
     await op.onGameFull(full('white', { id: 'g4' }), at(400));
     await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(430)); // 0
-    expect(f.of('setOpensAt').map(c => c.args[0])).toEqual([100, 50, 33.3]);
+    expect(f.of('setOpensAt').map(c => c.args[0])).toEqual([50, 50, 50]);
   });
   it('a refused opening value is logged and the end still settles', async () => {
     const f = fakes({ failOpensAt: true });

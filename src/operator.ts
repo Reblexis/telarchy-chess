@@ -149,6 +149,9 @@ const mmss = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
+/** docs/chess.md "Every game's book opens at 50": the middle of the score. */
+const OPENS_AT = 50;
+
 export class Operator {
   game: GameRecord | null = null;
   open: OpenMove | null = null;
@@ -517,13 +520,9 @@ export class Operator {
       return;
     }
     const word = g.result === 100 ? 'win' : g.result === 50 ? 'draw' : 'loss';
-    // docs/chess.md "The next game's book opens at the player's average
-    // score": before the settlement, which is when the platform opens it.
-    const scores: number[] = this.games.flatMap(x => (typeof x.result === 'number' ? [x.result] : []));
-    if (scores.length) {
-      const mean = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
-      try { await this.telarchy.setOpensAt(mean); } catch (e) { console.error(`opens at ${mean}: ${(e as Error).message}`); }
-    }
+    // docs/chess.md "Every game's book opens at 50": before the settlement,
+    // which is when the platform opens the next book.
+    try { await this.telarchy.setOpensAt(OPENS_AT); } catch (e) { console.error(`opens at ${OPENS_AT}: ${(e as Error).message}`); }
     try { await this.telarchy.postReading(g.result, now); } catch (e) { console.error(`reading: ${(e as Error).message}`); }
     this.settlement = { value: g.result, reason: `Game ${g.number} vs ${g.opponent.name}: ${word}`, at: now.toISOString(), nextTryAt: now.getTime() };
     await this.trySettle(now);
