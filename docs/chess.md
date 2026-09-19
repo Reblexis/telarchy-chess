@@ -149,15 +149,15 @@ game has no score and sets nothing. A refusal is logged and the end goes on.
 at the main book's current value (Viktor, 2026-09-13). The operator never
 trades to move them.
 
-**Liquidity.** The metric's credits on the cell: 6,000 for the main book,
-2,000 per option book, from the owner's proposal credits (never the
-proposer's). That is twice the snake's, because a chess move also waits on the
-opponent and so a book here is open about twice as long for the same
-decision. A move with 35 legal moves puts 70,000 credits out and gets 68,000
-back when the other options void; the chosen book's 2,000 stays out until the
-game ends. The operator's float must cover the widest move (218 legal moves,
-436,000) plus a game's chosen books, and what traders win off those books is
-the only thing that draws it down. The operator sets these on the metric at
+**Liquidity.** The metric's credits on the cell: 10 for the main book and
+10 per option book, from the owner's proposal credits (never the
+proposer's). The books are shallow on purpose: a book of the owner's credits
+opening far from the honest price paid whoever bet against the player and
+then steered it into losing, and ten credits leave nothing worth that. A
+move with 35 legal moves puts 350 credits out and gets 340 back when the
+other options void; the chosen book's 10 stays out until the game ends. The
+operator's float must cover the widest move (218 legal moves, 2,180) plus a
+game's chosen books. The operator sets these on the metric at
 the start of each game, so a change takes effect with the next game.
 
 ## The move

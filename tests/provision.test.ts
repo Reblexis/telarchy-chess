@@ -47,6 +47,11 @@ describe('provisioning the Chess floor', () => {
     expect(calls.find(c => c.url.endsWith('/auth/profile'))?.body).toEqual({ nickname: 'Rookie' });
   });
 
+  it('a floor made again opens its books at the same 10 credits the operator writes', () => {
+    const tp = provision().calls.find(c => c.method === 'POST' && c.url.endsWith('/metrics'))!.body.timePreference;
+    expect(Object.values(tp.horizonCredits)).toEqual([{ book: 10, proposal: 10 }]);
+  });
+
   it('the platform\'s starter proposal is removed: the floor carries move proposals and nothing else', () => {
     const { calls } = provision();
     const del = calls.filter(c => c.method === 'DELETE');
