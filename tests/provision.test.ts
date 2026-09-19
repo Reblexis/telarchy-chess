@@ -18,14 +18,16 @@ function provision(extra: Record<string, string> = {}) {
 describe('provisioning the Chess floor', () => {
   it('the move question is "If the move {option} is made", never the platform default "With {option}"', () => {
     const { settings } = provision();
-    expect(settings.optionQuestionTemplate).toBe("If the move {option} is made, what will {workspace}'s final {metric} be?");
+    expect(settings.optionQuestionTemplate).toBe('If the move {option} is made, what will my {metric} be {date}?');
     expect(settings.optionQuestionTemplate).not.toMatch(/^With /);
   });
 
-  it('the about text names the Lichess account, the score, the rule, and links the trading guide', () => {
+  it('the about text names the Lichess account, the rating and when it is read, the rule, and links the trading guide', () => {
     const { settings } = provision();
     expect(settings.subjectAbout).toContain('lichess.org/@/TelarchyRookie');
-    expect(settings.subjectAbout).toContain('100 if TelarchyRookie wins this game, 50 for a draw, 0 for a loss');
+    expect(settings.subjectAbout).toContain('Lichess classical rating');
+    expect(settings.subjectAbout).toContain('between 30 and 60 minutes');
+    expect(settings.subjectAbout).not.toMatch(/Game score|100 if/);
     expect(settings.subjectAbout).toContain('the highest priced move is played');
     expect(settings.subjectAbout).toContain('docs/trading.md');
     expect(settings.subjectAbout).not.toContain('TelarchyBot');
@@ -41,10 +43,26 @@ describe('provisioning the Chess floor', () => {
     expect(provision({ FEED_URL: 'https://feed.test' }).settings.liveFeed).toEqual({ kind: 'chess', url: 'https://feed.test' });
   });
 
-  it('the metric asks the owner\'s question and the operator is named Rookie', () => {
-    const { calls } = provision();
-    expect(calls.find(c => c.method === 'PUT' && c.url.includes('/metrics/'))?.body).toEqual({ marketTitle: 'What score will I reach this game?' });
-    expect(calls.find(c => c.url.endsWith('/auth/profile'))?.body).toEqual({ nickname: 'Rookie' });
+  it('the one metric is Lichess rating, 1200 to 2000, opening at the rating given, with no question of its own and no opening value', () => {
+    const { calls } = provision({ RATING: '1562' });
+    const made = calls.filter(c => c.method === 'POST' && c.url.endsWith('/metrics'));
+    expect(made).toHaveLength(1);
+    expect(made[0].body).toMatchObject({ name: 'Lichess rating', value: 1562, marketRangeMin: 1200, marketRangeMax: 2000 });
+    expect(made[0].body.marketTitle).toBeUndefined();
+    expect(made[0].body.opensAt).toBeUndefined();
+    expect(calls.some(c => c.method === 'PUT' && c.url.includes('/metrics/'))).toBe(false);
+  });
+  it('the placeholder horizon is a half-hour mark at the documented depth', () => {
+    const tp = provision().calls.find(c => c.method === 'POST' && c.url.endsWith('/metrics'))!.body.timePreference;
+    expect(tp.customHorizons).toHaveLength(1);
+    expect(tp.customHorizons[0]).toMatch(/^\d{4}-\d\d-\d\dT\d\d:(00|30)$/);
+    expect(tp.horizonCredits[tp.customHorizons[0]]).toEqual({ book: 6000, proposal: 2000 });
+  });
+  it('a rating that is not a number refuses to provision', () => {
+    expect(() => provision({ RATING: 'abc' })).toThrow();
+  });
+  it('the operator is named Rookie', () => {
+    expect(provision().calls.find(c => c.url.endsWith('/auth/profile'))?.body).toEqual({ nickname: 'Rookie' });
   });
 
   it('the platform\'s starter proposal is removed: the floor carries move proposals and nothing else', () => {

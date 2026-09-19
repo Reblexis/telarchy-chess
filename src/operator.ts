@@ -1,11 +1,11 @@
-// The operator of docs/chess.md: games, the move, the settlement, seeking,
+// The operator of docs/chess.md: games, the move, the marks, seeking,
 // and the feed. Driven by Lichess events (onGameFull, onGameState,
 // onChallenge, onChallengeGone) and a clock (tick); every time is passed in.
 import {
   challengeVerdict,
   decide,
   fenAfter,
-  horizonCell,
+  targetMark, markInstant, ratingAt, type RatingRecord,
   legalOptions,
   moveNumber,
   pickOpponent,
@@ -42,9 +42,8 @@ export interface TelarchyClient {
   approveOption(ref: ProposalRef, option: string): Promise<void>;
   declineProposal(ref: ProposalRef): Promise<void>;
   /** Where the metric's next untraded book opens (docs/chess.md, "The next game's book"). */
-  setOpensAt(value: number): Promise<void>;
   postReading(value: number, at: Date): Promise<void>;
-  settleMetric(value: number, at: Date, reason: string): Promise<void>;
+  resolveBooks(): Promise<void>;
 }
 
 /** The Lichess calls. Deliberately no draw, takeback or resign method. */
@@ -100,11 +99,13 @@ interface GameRecord {
   rated: boolean; clock: { initial: number; increment: number } | null;
   moves: string[]; clocks: { white: number; black: number }; inc: { white: number; black: number };
   status: string; winner: Color | null; result: 100 | 50 | 0 | null;
-  startedAt: string; endedAt: string | null; cell: string;
+  startedAt: string; endedAt: string | null;
 }
 
 interface OpenMove {
   game: number; gameId: string; plies: number; move: number;
+  /** The mark this move's books are priced on (docs/chess.md, "Books on the half hour"). */
+  cell: string;
   proposal: ProposalRef; options: MoveOption[];
   openedAt: string; decideAt: string; deadline: string;
   quotes: Prices | null; quotesAt: string | null;
@@ -115,7 +116,6 @@ export interface Ply {
   kind?: DecisionKind; price?: number | null; tied?: number;
 }
 
-interface Settlement { value: 100 | 50 | 0; reason: string; at: string; nextTryAt: number }
 
 const RULE =
   'On my turn one proposal offers every legal move as an option, each priced by its own book on this game\'s score (100 a win, 50 a draw, 0 a loss). Two seconds before the deadline the option with the highest price is played; a tie is random among the tied, and no price at all plays a random legal move.';
@@ -127,7 +127,9 @@ const TRADES_KEPT = 20;
 const CALL_POINTS = 300;
 const POLL_TIMEOUT_MS = 10_000;
 const DECIDE_READ_MS = 2_000;
-const SETTLE_RETRY_MS = 60_000;
+const ACCOUNT_RETRY_MS = 5_000;
+const RATINGS_KEPT = 200;
+const MARK_GIVEN_UP_MS = 24 * 3600_000;
 const SEEK_IDLE_MS = 120_000;
 const CHALLENGE_WAIT_MS = 60_000;
 const SEEK_GAP_MS = 30_000;
@@ -150,7 +152,6 @@ const mmss = (ms: number) => {
 };
 
 /** docs/chess.md "Every game's book opens at 50": the middle of the score. */
-const OPENS_AT = 50;
 
 export class Operator {
   game: GameRecord | null = null;
@@ -165,7 +166,12 @@ export class Operator {
   private activityBusy = false;
   private activityError: string | null = null;
   games: Array<Omit<GameRecord, 'moves' | 'clocks' | 'inc'> & { plies: number }> = [];
-  settlement: Settlement | null = null;
+  /** docs/chess.md "Books on the half hour": the horizon last written, the
+   *  marks not settled yet (oldest first), and the rating as it was read. */
+  cell: string | null = null;
+  marks: string[] = [];
+  ratings: RatingRecord[] = [];
+  private accountOkAt = 0;
   pendingDeclines: Array<{ ref: ProposalRef; nextTryAt: number }> = [];
   /** Every game's plies by game number (docs/chess.md, "The feed", /history). */
   plies: Record<number, Ply[]> = {};
@@ -202,7 +208,7 @@ export class Operator {
 
   async onChallenge(ch: ChallengeLike & { id: string; challenger?: { id?: string } }, now: Date): Promise<void> {
     if (ch.challenger?.id?.toLowerCase() === this.me) return; // our own outgoing challenge, echoed
-    const busy = this.pendingDeclines.length > 0 || this.running() || !!this.settlement || !!this.paused || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
+    const busy = this.pendingDeclines.length > 0 || this.running() || !!this.paused || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
     const v = challengeVerdict(ch, { busy });
     try {
       if (v.accept) {
@@ -230,24 +236,19 @@ export class Operator {
       const color: Color = full.white.id?.toLowerCase() === this.me ? 'white' : 'black';
       const opp = color === 'white' ? full.black : full.white;
       const number = (this.games.at(-1)?.number ?? 0) + 1;
-      const cell = horizonCell(now);
       this.game = {
         number, id: full.id, color,
         opponent: { name: opp.name ?? opp.id ?? '?', title: opp.title ?? null, rating: opp.rating ?? null },
         rated: !!full.rated, clock: full.clock ?? null,
         moves: [], clocks: { white: 0, black: 0 }, inc: { white: 0, black: 0 },
         status: 'started', winner: null, result: null,
-        startedAt: now.toISOString(), endedAt: null, cell,
+        startedAt: now.toISOString(), endedAt: null,
       };
       this.games.push(this.summary(this.game));
       this.call = null; this.recentTrades = []; this.bookNames = new Map(); this.activityAt = 0;
       this.challengeOut = null;
       this.idleSince = null;
       this.remember(opp.id ?? opp.name ?? '');
-      // docs/chess.md "One book per game": a refusal is logged; the moves
-      // still run on whatever book exists (the undecided path covers none).
-      try { await this.telarchy.setHorizon(cell); } catch (e) { console.error(`set horizon ${cell}: ${(e as Error).message}`); }
-      try { await this.telarchy.refreshBooks(); } catch (e) { console.error(`refresh books: ${(e as Error).message}`); }
     }
     await this.onGameState(full.state, now);
   }
@@ -283,6 +284,10 @@ export class Operator {
     if (w === null) {
       return this.play(this.randomOf(options), { kind: 'clock', price: null, tied: 0, reason: null }, move, now);
     }
+    // docs/chess.md "Books on the half hour": the move is priced on the target;
+    // if writing it was refused, on the mark the metric still carries.
+    await this.ensureTarget(now);
+    const cell = this.cell ?? targetMark(now);
     const deadline = new Date(now.getTime() + w * 1000);
     let proposal: ProposalRef;
     try {
@@ -291,7 +296,7 @@ export class Operator {
       return this.play(this.randomOf(options), { kind: 'undecided', price: null, tied: 0, reason: `posting failed: ${(e as Error).message}` }, move, now);
     }
     this.open = {
-      game: g.number, gameId: g.id, plies, move, proposal, options,
+      game: g.number, gameId: g.id, plies, move, cell, proposal, options,
       openedAt: now.toISOString(),
       decideAt: new Date(deadline.getTime() - 2000).toISOString(),
       deadline: deadline.toISOString(),
@@ -389,8 +394,10 @@ export class Operator {
       const cleanup = this.pendingDeclines.find(x => t >= x.nextTryAt);
       if (cleanup) await this.decline(cleanup.ref, now);
       if (this.claimAt !== null && t >= this.claimAt) await this.claim();
-      if (t - this.accountAt >= 60_000) await this.readAccount(now);
-      if (this.settlement && t >= this.settlement.nextTryAt) await this.trySettle(now);
+      const due = this.marks.some(m => markInstant(m).getTime() <= t && this.accountOkAt < markInstant(m).getTime());
+      if (t - this.accountAt >= (due ? ACCOUNT_RETRY_MS : 60_000)) await this.readAccount(now);
+      await this.settleMarks(now);
+      if (!this.open) await this.ensureTarget(now);
       if (this.paused && !this.running() && t - this.probeAt >= PROBE_EVERY_MS) await this.probe(now);
       await this.seek(now);
     } finally {
@@ -405,7 +412,7 @@ export class Operator {
     this.lastPollAt = now.getTime();
     if (room < 1000) return;
     try {
-      const q = await within(this.telarchy.readPrices(open.proposal, this.game?.cell ?? null), Math.min(POLL_TIMEOUT_MS, room));
+      const q = await within(this.telarchy.readPrices(open.proposal, open.cell), Math.min(POLL_TIMEOUT_MS, room));
       if (this.open !== open) return;
       open.quotes = { ...(open.quotes ?? {}), ...q };
       this.nameBooks(open);
@@ -464,7 +471,7 @@ export class Operator {
     const open = this.open!;
     let quotes: Prices = open.quotes ?? {};
     try {
-      quotes = await within(this.telarchy.readPrices(open.proposal, this.game?.cell ?? null), DECIDE_READ_MS);
+      quotes = await within(this.telarchy.readPrices(open.proposal, open.cell), DECIDE_READ_MS);
       open.quotes = quotes;
       this.nameBooks(open);
       open.quotesAt = now.toISOString();
@@ -519,34 +526,62 @@ export class Operator {
       this.idleSince = now.getTime();
       return;
     }
-    const word = g.result === 100 ? 'win' : g.result === 50 ? 'draw' : 'loss';
-    // docs/chess.md "Every game's book opens at 50": before the settlement,
-    // which is when the platform opens the next book.
-    try { await this.telarchy.setOpensAt(OPENS_AT); } catch (e) { console.error(`opens at ${OPENS_AT}: ${(e as Error).message}`); }
-    try { await this.telarchy.postReading(g.result, now); } catch (e) { console.error(`reading: ${(e as Error).message}`); }
-    this.settlement = { value: g.result, reason: `Game ${g.number} vs ${g.opponent.name}: ${word}`, at: now.toISOString(), nextTryAt: now.getTime() };
-    await this.trySettle(now);
+    // docs/chess.md "A mark settles when it arrives": a game's end settles
+    // nothing; it moves the rating, and the rating is read at the marks.
+    this.idleSince = now.getTime();
   }
 
-  /** docs/chess.md "The end settles it": retried every minute, and nothing new
-   *  starts until it has gone through. */
-  private async trySettle(now: Date): Promise<void> {
-    if (this.pendingDeclines.length) return;
-    const s = this.settlement!;
+  // ---- marks ------------------------------------------------------------
+
+  /** docs/chess.md "Books on the half hour": the target is the metric's only
+   *  horizon; a refusal is logged and tried again on the next tick. */
+  private async ensureTarget(now: Date): Promise<void> {
+    const cell = targetMark(now);
+    if (cell === this.cell) return;
     try {
-      await this.telarchy.settleMetric(s.value, new Date(s.at), s.reason);
-      this.settlement = null;
-      this.idleSince = now.getTime();
+      await this.telarchy.setHorizon(cell);
     } catch (e) {
-      s.nextTryAt = now.getTime() + SETTLE_RETRY_MS;
-      console.error(`settle (${s.reason}): ${(e as Error).message}`);
+      console.error(`set horizon ${cell}: ${(e as Error).message}`);
+      return;
+    }
+    this.cell = cell;
+    if (!this.marks.includes(cell)) this.marks.push(cell);
+    try { await this.telarchy.refreshBooks(); } catch (e) { console.error(`refresh books: ${(e as Error).message}`); }
+  }
+
+  /** docs/chess.md "A mark settles when it arrives": every due mark gets the
+   *  rating at its first instant, stamped there, then one resolve. A mark
+   *  leaves the list only when both went through. */
+  private async settleMarks(now: Date): Promise<void> {
+    const t = now.getTime();
+    const given = this.marks.filter(m => t - markInstant(m).getTime() >= MARK_GIVEN_UP_MS);
+    for (const m of given) console.error(`mark ${m}: dropped unsettled after 24 hours`);
+    if (given.length) this.marks = this.marks.filter(m => !given.includes(m));
+    const due = this.marks.filter(m => markInstant(m).getTime() <= t && this.accountOkAt >= markInstant(m).getTime()).sort();
+    const read: string[] = [];
+    for (const m of due) {
+      const rating = ratingAt(this.ratings, markInstant(m));
+      if (rating === null) { console.error(`mark ${m}: no rating recorded by then`); continue; }
+      try {
+        await this.telarchy.postReading(rating, markInstant(m));
+        read.push(m);
+      } catch (e) {
+        console.error(`reading for mark ${m}: ${(e as Error).message}`);
+      }
+    }
+    if (!read.length) return;
+    try {
+      await this.telarchy.resolveBooks();
+      this.marks = this.marks.filter(m => !read.includes(m));
+    } catch (e) {
+      console.error(`resolve: ${(e as Error).message}`);
     }
   }
 
   // ---- seeking ----------------------------------------------------------
 
   private async seek(now: Date): Promise<void> {
-    if (this.pendingDeclines.length || !this.opts.seek || this.running() || this.settlement || this.paused || this.open) return;
+    if (this.pendingDeclines.length || !this.opts.seek || this.running() || this.paused || this.open) return;
     const t = now.getTime();
     if (this.idleSince === null) this.idleSince = t;
     if (this.challengeOut) {
@@ -560,11 +595,11 @@ export class Operator {
     }
     if (t - this.idleSince < SEEK_IDLE_MS || t < this.nextSeekAt) return;
     try {
-      this.player = await this.lichess.account();
-      const target = pickOpponent(await this.lichess.onlineBots(), this.player, this.recentOpponents, this.rng);
+      const me = await this.lichess.account();
+      this.sawAccount(me, now);
+      const target = pickOpponent(await this.lichess.onlineBots(), me, this.recentOpponents, this.rng);
       if (!target) {
         // docs/chess.md "Opponents": an empty search says why, so a player that finds no games is never silent.
-        const me = this.player;
         console.error(`seek: nobody to challenge at rating ${me.rating}${me.provisional ? '?' : ''}, within ${SEEK_MAX_BAND} of it, the last opponent excluded`);
         this.nextSeekAt = t + CHALLENGE_WAIT_MS;
         return;
@@ -595,9 +630,19 @@ export class Operator {
   private async readAccount(now: Date): Promise<void> {
     this.accountAt = now.getTime();
     try {
-      this.player = await this.lichess.account();
+      this.sawAccount(await this.lichess.account(), now);
     } catch (e) {
       console.error(`account: ${(e as Error).message}`);
+    }
+  }
+
+  /** docs/chess.md "The rating at a mark": recorded, with the time it was
+   *  read, whenever the account shows a number different from the last. */
+  private sawAccount(p: PlayerRecord, now: Date): void {
+    this.player = p;
+    this.accountOkAt = now.getTime();
+    if (this.ratings.at(-1)?.rating !== p.rating) {
+      this.ratings = [...this.ratings, { at: now.toISOString(), rating: p.rating }].slice(-RATINGS_KEPT);
     }
   }
 
@@ -621,7 +666,7 @@ export class Operator {
   toJSON() {
     return {
       game: this.game, open: this.open, recentDecisions: this.recentDecisions, games: this.games,
-      settlement: this.settlement, playedPly: this.playedPly, recentOpponents: this.recentOpponents,
+      cell: this.cell, marks: this.marks, ratings: this.ratings, playedPly: this.playedPly, recentOpponents: this.recentOpponents,
       plies: this.plies, pendingDeclines: this.pendingDeclines, paused: this.paused,
     };
   }
@@ -632,7 +677,9 @@ export class Operator {
     op.open = raw.open ?? null;
     op.recentDecisions = raw.recentDecisions ?? [];
     op.games = raw.games ?? [];
-    op.settlement = raw.settlement ?? null;
+    op.cell = raw.cell ?? null;
+    op.marks = raw.marks ?? [];
+    op.ratings = raw.ratings ?? [];
     op.playedPly = raw.playedPly ?? null;
     op.recentOpponents = raw.recentOpponents ?? [];
     op.plies = raw.plies ?? {};
@@ -657,7 +704,7 @@ export class Operator {
   publicState(now: Date) {
     const g = this.game;
     const open = this.open;
-    const phase = open ? 'our-move' : this.running() ? 'their-move' : this.settlement ? 'settling' : this.paused ? 'paused' : 'seeking';
+    const phase = open ? 'our-move' : this.running() ? 'their-move'  : this.paused ? 'paused' : 'seeking';
     return {
       schema: 1,
       phase,
@@ -683,8 +730,9 @@ export class Operator {
           return { id: o.id, san: o.label, price: null, lead: null, marketId: q?.marketId ?? null, reason: 'no price' };
         }),
       },
-      cell: g?.cell ?? null,
-      cellEndsAt: g && g.cell !== 'until-settled' ? new Date(Date.parse(`${g.cell}:00Z`) + 60_000).toISOString() : null,
+      cell: this.cell,
+      cellEndsAt: this.cell ? new Date(markInstant(this.cell).getTime() + 60_000).toISOString() : null,
+      marksPending: [...this.marks].sort(),
       call: this.call,
       recentTrades: this.recentTrades,
       recentDecisions: this.recentDecisions,
@@ -697,7 +745,7 @@ export class Operator {
       trade: {
         base: this.opts.tradeBase ?? 'https://telarchy.com/api', endpoint: 'POST /api/predictions/trade',
         auth: 'X-Agent-Key', workspaceHeader: 'X-Workspace-Id', workspaceId: this.opts.workspaceId,
-        rangeMin: 0, rangeMax: 100,
+        rangeMin: 1200, rangeMax: 2000,
       },
     };
   }

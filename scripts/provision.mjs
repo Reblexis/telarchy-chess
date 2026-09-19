@@ -50,22 +50,23 @@ if (ws.starterProposalId) {
   await call('DELETE', `/proposals/${ws.starterProposalId}`, undefined, wsId);
 }
 
-// A placeholder cell a day out; the operator replaces it with each game's own cell.
-const cell = new Date(Date.now() + 24 * 3600_000).toISOString().slice(0, 16);
-console.error('# creating metric Game score');
-const metric = await call('POST', '/metrics', {
-  name: 'Game score',
-  description:
-    'TelarchyRookie\'s result in its current Lichess game, from its own side: 100 for a win, 50 for a draw, 0 for a loss. Every move of the game is a proposal with one option per legal move; the option priced highest is played. The game\'s books settle the moment the game ends.',
-  value: 50,
-  marketRangeMin: 0,
-  marketRangeMax: 100,
-  timePreference: { enabled: false, customHorizons: [cell], horizonCredits: { [cell]: { book: 6000, proposal: 2000 } } },
-}, wsId);
+// The rating the metric starts from (docs/chess.md, "The workspace"): the player's classical rating now.
+const RATING = Number(process.env.RATING ?? '1500');
+if (!Number.isFinite(RATING)) { console.error('RATING must be a number'); process.exit(1); }
 
-// The floor's question, in the owner's words (docs/chess.md, "The workspace").
-console.error('# metric question');
-await call('PUT', `/metrics/${metric.id}`, { marketTitle: 'What score will I reach this game?' }, wsId);
+// A placeholder mark; the operator writes the real target on its first tick (docs/chess.md, "Books on the half hour").
+const HALF = 30 * 60_000;
+const cell = new Date(Math.ceil((Date.now() + HALF) / HALF) * HALF).toISOString().slice(0, 16);
+console.error('# creating metric Lichess rating');
+const metric = await call('POST', '/metrics', {
+  name: 'Lichess rating',
+  description:
+    'TelarchyRookie\'s classical rating on Lichess, as Lichess publishes it. Every move is a proposal with one option per legal move, each priced on this rating at a half-hour mark between 30 and 60 minutes on; the option priced highest is played. A mark settles on the rating at its first instant.',
+  value: RATING,
+  marketRangeMin: 1200,
+  marketRangeMax: 2000,
+  timePreference: { enabled: false, customHorizons: [cell], horizonTitles: { [cell]: `at ${cell.slice(11)} UTC` }, horizonCredits: { [cell]: { book: 6000, proposal: 2000 } } },
+}, wsId);
 
 // The bot's name on Telarchy: the operator is the proposer of every move (docs/chess.md, "The workspace").
 // The workspace header is required: without it the store answers 401 for this key.
@@ -81,9 +82,9 @@ await call('PUT', `/workspaces/${wsId}/settings`, {
   description: 'A Lichess player whose every move is chosen by this market: on its turn every legal move is an option, and the one priced highest is played.',
   // The move question and the about text (docs/chess.md, "The workspace"): set here so a re-made floor never
   // falls back to the platform's "With {option}, ..." wording.
-  optionQuestionTemplate: "If the move {option} is made, what will {workspace}'s final {metric} be?",
+  optionQuestionTemplate: 'If the move {option} is made, what will my {metric} be {date}?',
   subjectAbout:
-    'TelarchyRookie plays real games on Lichess (lichess.org/@/TelarchyRookie). On each of its turns one proposal appears with every legal move as an option. Each option is priced on Game score: 100 if TelarchyRookie wins this game, 50 for a draw, 0 for a loss. Two seconds before the deadline the highest priced move is played and the others void with a refund; a tie is random. When the game ends every open book settles at the result.\n\n[How to trade with a bot](https://github.com/Reblexis/telarchy-chess/blob/main/docs/trading.md)',
+    'TelarchyRookie plays real games on Lichess (lichess.org/@/TelarchyRookie). On each of its turns one proposal appears with every legal move as an option. Each option is priced on TelarchyRookie\'s Lichess classical rating at a half-hour mark between 30 and 60 minutes on, named in the option\'s question. Two seconds before the deadline the highest priced move is played and the others void with a refund; a tie is random. Every book settles on the rating at its mark.\n\n[How to trade with a bot](https://github.com/Reblexis/telarchy-chess/blob/main/docs/trading.md)',
   ...(FEED_URL ? { liveFeed: { kind: 'chess', url: FEED_URL } } : {}),
 }, wsId);
 

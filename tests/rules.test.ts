@@ -10,7 +10,7 @@ import {
   scoreOf,
   challengeVerdict,
   pickOpponent,
-  horizonCell,
+  targetMark, markInstant, markTitle, ratingAt,
   sanOf,
 } from '../src/rules.js';
 
@@ -95,8 +95,53 @@ describe('names and numbers', () => {
     expect(moveNumber(2)).toBe(2);
     expect(moveNumber(23)).toBe(12);
   });
-  it('the game\'s book is open until the game ends, without a fixed time', () => {
-    expect(horizonCell(new Date('2026-09-13T14:05:42Z'))).toBe('until-settled');
+  it('EVERY BOOK IS PRICED ON A MARK AT LEAST 30 MINUTES AFTER IT OPENS: the target is the first half-hour mark that far away', () => {
+    expect(targetMark(new Date('2026-09-13T12:10:00Z'))).toBe('2026-09-13T13:00');
+    expect(targetMark(new Date('2026-09-13T12:40:00Z'))).toBe('2026-09-13T13:30');
+    expect(targetMark(new Date('2026-09-13T12:29:59.999Z'))).toBe('2026-09-13T13:00');
+    expect(targetMark(new Date('2026-09-13T12:30:00.001Z'))).toBe('2026-09-13T13:30');
+    for (let m = 0; m < 180; m++) {
+      const now = new Date(Date.parse('2026-09-13T22:00:17Z') + m * 60_000);
+      const gap = markInstant(targetMark(now)).getTime() - now.getTime();
+      expect(gap).toBeGreaterThanOrEqual(30 * 60_000);
+      expect(gap).toBeLessThan(60 * 60_000);
+    }
+  });
+  it('exactly on a mark the one 30 minutes on is far enough', () => {
+    expect(targetMark(new Date('2026-09-13T12:00:00.000Z'))).toBe('2026-09-13T12:30');
+    expect(targetMark(new Date('2026-09-13T12:30:00.000Z'))).toBe('2026-09-13T13:00');
+  });
+  it('a mark crosses midnight, the month and the year in UTC', () => {
+    expect(targetMark(new Date('2026-09-30T23:40:00Z'))).toBe('2026-10-01T00:30');
+    expect(targetMark(new Date('2026-12-31T23:31:00Z'))).toBe('2027-01-01T00:30');
+  });
+  it('a mark is a minute cell: its instant is its first second, its title the clock time in UTC', () => {
+    expect(markInstant('2026-09-13T13:30').toISOString()).toBe('2026-09-13T13:30:00.000Z');
+    expect(markTitle('2026-09-13T13:30')).toBe('at 13:30 UTC');
+    expect(markTitle('2026-10-01T00:00')).toBe('at 00:00 UTC');
+  });
+  describe('the rating at a mark is the last rating recorded at or before its first instant', () => {
+    const rec = [
+      { at: '2026-09-13T12:01:00.000Z', rating: 1562 },
+      { at: '2026-09-13T12:48:10.000Z', rating: 1554 },
+      { at: '2026-09-13T13:00:00.000Z', rating: 1561 },
+      { at: '2026-09-13T13:00:00.001Z', rating: 1570 },
+    ];
+    it('the ordinary case, and a record on the instant itself counts', () => {
+      expect(ratingAt(rec, markInstant('2026-09-13T12:30'))).toBe(1562);
+      expect(ratingAt(rec, markInstant('2026-09-13T13:00'))).toBe(1561);
+      expect(ratingAt(rec, markInstant('2026-09-13T13:30'))).toBe(1570);
+    });
+    it('a game finished after the mark never reaches it', () => {
+      expect(ratingAt(rec.slice(0, 2), new Date('2026-09-13T12:48:09.999Z'))).toBe(1562);
+    });
+    it('nothing recorded by then is null, and so is an empty record', () => {
+      expect(ratingAt(rec, markInstant('2026-09-13T12:00'))).toBeNull();
+      expect(ratingAt([], markInstant('2026-09-13T12:00'))).toBeNull();
+    });
+    it('the record need not be in order', () => {
+      expect(ratingAt([rec[2], rec[0], rec[1]], markInstant('2026-09-13T13:00'))).toBe(1561);
+    });
   });
 });
 
@@ -126,12 +171,24 @@ describe('which challenges are accepted', () => {
     challenger: { id: 'somebot', name: 'SomeBot', rating: 1900 },
     ...over,
   });
-  it('standard real-time, base 10 to 180 minutes, increment 0 to 180 s, rated or casual, is accepted when idle', () => {
+  it('standard, rated, and a clock Lichess counts as classical is accepted when idle', () => {
     expect(challengeVerdict(ch(), { busy: false })).toEqual({ accept: true });
-    expect(challengeVerdict(ch({ rated: false, timeControl: { type: 'clock', limit: 600, increment: 0 } }), { busy: false })).toEqual({ accept: true });
+    expect(challengeVerdict(ch({ timeControl: { type: 'clock', limit: 1500, increment: 0 } }), { busy: false })).toEqual({ accept: true });
+    expect(challengeVerdict(ch({ timeControl: { type: 'clock', limit: 600, increment: 23 } }), { busy: false })).toEqual({ accept: true });
     expect(challengeVerdict(ch({ timeControl: { type: 'clock', limit: 10800, increment: 180 } }), { busy: false })).toEqual({ accept: true });
   });
-  it('a player that is busy or settling declines with later', () => {
+  it('ONLY A GAME THAT MOVES THE CLASSICAL RATING IS PLAYED: a casual challenge declines with rated', () => {
+    expect(challengeVerdict(ch({ rated: false }), { busy: false })).toEqual({ accept: false, reason: 'rated' });
+    expect(challengeVerdict(ch({ rated: undefined }), { busy: false })).toEqual({ accept: false, reason: 'rated' });
+  });
+  it('ONLY A GAME THAT MOVES THE CLASSICAL RATING IS PLAYED: a rapid clock (base plus 40 increments under 25 minutes) declines with timeControl', () => {
+    const tc = (limit: number, increment: number) => challengeVerdict(ch({ timeControl: { type: 'clock', limit, increment } }), { busy: false });
+    expect(tc(600, 0)).toEqual({ accept: false, reason: 'timeControl' });
+    expect(tc(900, 10)).toEqual({ accept: false, reason: 'timeControl' });
+    expect(tc(1499, 0)).toEqual({ accept: false, reason: 'timeControl' });
+    expect(tc(600, 22)).toEqual({ accept: false, reason: 'timeControl' });
+  });
+  it('a player that is busy declines with later', () => {
     expect(challengeVerdict(ch(), { busy: true })).toEqual({ accept: false, reason: 'later' });
   });
   it('another variant declines with variant', () => {

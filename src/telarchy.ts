@@ -1,7 +1,7 @@
 // The Telarchy client the chess operator uses (docs/chess.md, "The workspace"
 // and "The move"). Deliberately has no trade method: the operator never trades.
 import type { Activity, Prices, ProposalRef, RawTrade, TelarchyClient } from './operator.js';
-import type { MoveOption } from './rules.js';
+import { markTitle, type MoveOption } from './rules.js';
 
 export interface SessionAuth {
   /** A platform-admin browser account: the beta store is admin-gated and refuses agent keys.
@@ -115,7 +115,7 @@ export class HttpTelarchyClient implements TelarchyClient {
     const withOptions = rows.filter(x => Array.isArray(x?.options));
     let row: any;
     if (cell) {
-      const end = cell === 'until-settled' ? Date.parse('9999-12-31T00:00:00Z') : Date.parse(`${cell}:00Z`) + 60_000;
+      const end = Date.parse(`${cell}:00Z`) + 60_000;
       row = withOptions.find(x => x.targetDate === cell) ??
         withOptions.find(x => !x.targetDate && typeof x.resolvesOn === 'string' && Date.parse(x.resolvesOn) === end);
     } else {
@@ -175,13 +175,14 @@ export class HttpTelarchyClient implements TelarchyClient {
     await this.call('POST', `/proposals/${encodeURIComponent(ref.id)}/decline`, { refund: true });
   }
 
-  /** The game's cell becomes the metric's only horizon, with its book depths. */
+  /** docs/chess.md "Books on the half hour": the mark becomes the metric's
+   *  only horizon, titled with its clock time, with its book depths. */
   async setHorizon(cell: string): Promise<void> {
     await this.call('PUT', `/metrics/${encodeURIComponent(this.o.metricId)}`, {
       timePreference: {
         enabled: false,
         customHorizons: [cell],
-        ...(cell === 'until-settled' ? { horizonTitles: { [cell]: 'when the game ends' } } : {}),
+        horizonTitles: { [cell]: markTitle(cell) },
         horizonCredits: { [cell]: { book: MAIN_BOOK_CREDITS, proposal: OPTION_BOOK_CREDITS } },
       },
     });
@@ -191,15 +192,14 @@ export class HttpTelarchyClient implements TelarchyClient {
     await this.call('POST', '/predictions/markets/refresh', { force: true });
   }
 
-  async setOpensAt(value: number): Promise<void> {
-    await this.call('PUT', `/metrics/${encodeURIComponent(this.o.metricId)}`, { opensAt: value });
-  }
-
+  /** docs/chess.md "A mark settles when it arrives": `asOf` places the reading inside the mark's minute. */
   async postReading(value: number, at: Date): Promise<void> {
-    await this.call('PUT', `/metrics/${encodeURIComponent(this.o.metricId)}`, { value, asOf: at.toISOString(), updateNote: 'game result' });
+    await this.call('PUT', `/metrics/${encodeURIComponent(this.o.metricId)}`, { value, asOf: at.toISOString(), updateNote: 'rating at the mark' });
   }
 
-  async settleMetric(value: number, at: Date, reason: string): Promise<void> {
-    await this.call('POST', `/metrics/${encodeURIComponent(this.o.metricId)}/settle`, { value, asOf: at.toISOString(), reason });
+  /** Settles every book whose reading has arrived. There is no early
+   *  settlement here on purpose: it would close the books of every mark at once. */
+  async resolveBooks(): Promise<void> {
+    await this.call('POST', '/predictions/resolve', {});
   }
 }

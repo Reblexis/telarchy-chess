@@ -169,22 +169,29 @@ export function lastDecisionLines(s: any): [string, string] {
   const g = s?.game && typeof s.game === 'object' ? s.game : null;
   const d = (Array.isArray(s?.recentDecisions) ? s.recentDecisions : []).find((x: any) => x && isNum(g?.number) && x.game === g.number);
   const first = d && typeof d.san === 'string'
-    ? `Move ${isNum(d.move) ? d.move : '?'}: ${d.san}, ${d.kind === 'market' && isNum(d.price) ? `chosen at ${d.price.toFixed(1)} of 100` : 'chosen at random'}`
+    ? `Move ${isNum(d.move) ? d.move : '?'}: ${d.san}, ${d.kind === 'market' && isNum(d.price) ? `chosen at ${d.price.toFixed(1)}` : 'chosen at random'}`
     : 'Waiting for the first move';
   const opp = g?.opponent && typeof g.opponent === 'object' ? g.opponent : null;
   const who = `${typeof opp?.name === 'string' ? opp.name : 'the opponent'}${isNum(opp?.rating) ? ` (${opp.rating})` : ''}`;
   return [first, ended(g) ? 'Game over' : `Waiting for ${who} to reply`];
 }
 
-/** The main book's call: its history ending at the value now, held inside 0 to 100. */
+/** The main book's call: its history ending at the value now. */
 export function callSeries(s: any): { value: number | null; points: number[] } {
   const c = s?.call && typeof s.call === 'object' ? s.call : null;
   if (!c) return { value: null, points: [] };
-  const hold = (v: number) => Math.max(0, Math.min(100, v));
-  const points = (Array.isArray(c.history) ? c.history : []).filter((p: any) => isNum(p?.value)).map((p: any) => hold(p.value));
-  const value = isNum(c.value) ? hold(c.value) : null;
+  const points = (Array.isArray(c.history) ? c.history : []).filter((p: any) => isNum(p?.value)).map((p: any) => p.value as number);
+  const value = isNum(c.value) ? c.value : null;
   if (value !== null) points.push(value);
   return { value, points };
+}
+
+/** docs/chess.md "The stream": 80 rating points tall, centred on the player's
+ *  rating rounded to ten (the call without a player), hairlines at the centre and 20 either side. */
+export function callScale(s: any): { min: number; max: number; lines: number[]; centre: number } {
+  const from = isNum(s?.player?.rating) ? s.player.rating : isNum(s?.call?.value) ? s.call.value : 1500;
+  const centre = Math.round(from / 10) * 10;
+  return { min: centre - 40, max: centre + 40, lines: [centre - 20, centre, centre + 20], centre };
 }
 
 /** Up to `n` trades as the column writes them. */
@@ -258,7 +265,6 @@ export function nextCell(s: any, now: number): { label: string; value: string; t
   if (r === 100) return { label: 'Game over', value: 'won', tone: 'green' };
   if (r === 0) return { label: 'Game over', value: 'lost', tone: 'red' };
   if (r === 50) return { label: 'Game over', value: 'drawn', tone: 'fg' };
-  if (s?.phase === 'settling') return { label: 'Game over', value: 'settling', tone: 'mute' };
   return { label: 'Next game', value: 'seeking', tone: 'mute' };
 }
 
@@ -369,14 +375,15 @@ function draw(s: any, now: number, items: DrawnItem[]): Canvas {
   const record = recordLine(p);
   if (record) text(clip(record, 12, W, 500, 'mono', 1), X, LAYOUT.recordBaseline, 12, MUTE, 500, 'mono', 'left', 1);
 
-  // 5. the market's call: the main book over the game, always 0 to 100
+  // 5. the market's call: the target mark's main book, on a rating scale
   const call = callSeries(s);
   label("Market's call", X, LAYOUT.callLabel, W / 2);
-  text(call.value === null ? '-' : call.value.toFixed(1), RIGHT, LAYOUT.callLabel + 2, 20, call.value === null ? MUTE : ACCENT, 600, 'mono', 'right');
+  text(call.value === null ? '-' : String(Math.round(call.value)), RIGHT, LAYOUT.callLabel + 2, 20, call.value === null ? MUTE : ACCENT, 600, 'mono', 'right');
   const gx = X, gw = W - 40, gTop = LAYOUT.graphTop, gH = LAYOUT.graphH;
-  const gy = (v: number) => gTop + gH - (v / 100) * gH;
-  for (const v of [25, 50, 75]) {
-    ctx.strokeStyle = v === 50 ? '#3d3d49' : LINE; ctx.lineWidth = 1;
+  const scale = callScale(s);
+  const gy = (v: number) => gTop + gH - ((Math.max(scale.min, Math.min(scale.max, v)) - scale.min) / (scale.max - scale.min)) * gH;
+  for (const v of scale.lines) {
+    ctx.strokeStyle = v === scale.centre ? '#3d3d49' : LINE; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(gx, Math.round(gy(v)) + 0.5); ctx.lineTo(gx + gw, Math.round(gy(v)) + 0.5); ctx.stroke();
     text(String(v), RIGHT, gy(v) + 4, 11, COORD, 500, 'mono', 'right');
   }

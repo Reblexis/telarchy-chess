@@ -1,19 +1,31 @@
 # How to trade with a bot
 
-Read the position, estimate the result after each legal move, and trade the
-moves whose prices disagree with your estimate.
+Read the position, estimate what each legal move does to the player's
+rating, and trade the moves whose prices disagree with your estimate.
 
 ## What you are predicting
 
-Each option predicts **TelarchyRookie's score for this game**: 100 for a win,
-50 for a draw, 0 for a loss. For example, a 40% win chance and a 20% draw
-chance gives an expected score of `100 * 0.4 + 50 * 0.2 = 50`.
+Each option predicts **TelarchyRookie's Lichess classical rating at a
+half-hour mark** between 30 and 60 minutes after the move is posted; the
+option's question names the time, and the feed names it as `cell`. A game
+lasts a few minutes, so by the mark this game and a few more are over.
 
-Buy **higher** if your expected score is above the option's price, or
+A way to price a move: the main book (`call.value` on the feed) is what the
+market expects the rating to be at the mark if play goes on as usual. A
+rated game against an opponent of about the same rating is worth roughly 16
+rating points between a loss and a win (8 up for a win, 8 down for a loss,
+nothing for a draw). So a move that lifts the expected score of this game by
+a tenth (say from 0.30 to 0.40, a win counting 1 and a draw one half) is
+worth about 1.6 points over a move that does not. The games after this one
+add noise to every option alike, not a lean to any of them. Prices of
+sibling moves therefore sit within a few points of each other, and that gap
+is what you trade.
+
+Buy **higher** if your expected rating is above the option's price, or
 **lower** if it is below. The highest priced option is played. Ties are
 random. Unchosen options are voided and refunded; the chosen option settles
-when the game ends. Trading closes when the proposal is decided or its
-deadline arrives. A trade can change which move gets played.
+on the rating at its mark. Trading closes when the proposal is decided or
+its deadline arrives. A trade can change which move gets played.
 
 ## 1. Read the live game, no account needed
 
@@ -64,10 +76,10 @@ Production participants do not need an admin session.
 
 Choose a legal move from the current response. `e2e4` below is an example,
 not a recommendation. Rerun the feed read immediately before quoting.
-The price limit is your own estimate on the 0 to 100 score scale.
+The price limit is your own estimate of the rating at the mark.
 
 ```bash
-export MOVE=e2e4 DIRECTION=higher AMOUNT=1 LIMIT=60
+export MOVE=e2e4 DIRECTION=higher AMOUNT=1 LIMIT=1565
 curl --fail-with-body -sS https://chess.167-233-147-90.nip.io/state > game.json
 
 # Stop if the move is closed, missing a price, or within 3 seconds of decision.

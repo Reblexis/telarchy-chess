@@ -3,7 +3,7 @@
 A chess player on Lichess whose every move is chosen by a Telarchy
 workspace. When it is the player's turn, one proposal is posted with one
 option per legal move, each option priced by its own conditional market on
-the game's score, and the option the market prices highest is played.
+the player's Lichess rating half an hour on, and the option the market prices highest is played.
 Games are public and rated, so the player carries a Lichess rating
 anyone can check.
 
@@ -32,7 +32,7 @@ Everything below is the contract. Internals are free within it.
 ### Clocks
 
 Games are **real-time**; no correspondence and no unlimited games.
-The book has no calendar deadline: the game result triggers settlement.
+Every book is priced on the player's rating at a clock time ("Books on the half hour", below), never on a game's result.
 
 - **Games the player starts** are **30 minutes plus 20 seconds, rated**,
   colour random. 20 seconds is the largest increment the default
@@ -40,11 +40,14 @@ The book has no calendar deadline: the game result triggers settlement.
   1800`), which most bots run. 30+20 is Lichess's classical speed, so the
   rating shown is the classical rating.
 - **Incoming challenges** are accepted when the player is idle and the
-  challenge is standard chess, real-time, base 10 to 180 minutes,
-  increment 0 to 180 seconds, rated or casual, from a human or a bot.
+  challenge is standard chess, **rated**, real-time, base 10 to 180 minutes,
+  increment 0 to 180 seconds, on a clock Lichess counts as classical (base
+  plus 40 increments at least 25 minutes), from a human or a bot: the one
+  metric is the classical rating, and a game that cannot move it has no
+  move worth pricing.
   Anything else is declined with Lichess's matching reason
-  (`timeControl`, `variant`, `later` while a game is running or its
-  settlement is still pending).
+  (`timeControl`, `variant`, `rated` for a casual challenge, `later` while a
+  game is running).
 
 ### The decision window follows the clock
 
@@ -94,12 +97,12 @@ name is on them, **muted** (`notificationsMuted` on) like the snake, with
 no charter, and closed to outside proposals (`externalProposalsDisabled`)
 where the store supports it.
 
-One metric, **Game score**: TelarchyRookie's result in the current game from
-its own side, **100 for a win, 50 for a draw, 0 for a loss** (an aborted
-game has no result and settles nothing). Range 0 to 100. Its question is
-set by the owner as the metric's `marketTitle`, verbatim: **"What score
-will I reach this game?"**, so the floor never composes one with a clock
-time in it.
+One metric, **Lichess rating**: TelarchyRookie's classical rating as
+Lichess publishes it. Market range 1200 to 2000. It is the only metric: a
+move is judged by what it does to the rating, not by the game it belongs
+to. The metric carries no `marketTitle` and no `opensAt`, so a book's
+question names its own time and a book opens at the metric's value, which
+is the rating now: the right price for a book nobody has traded.
 
 **Provisioning removes the platform's starter proposal** (the one every new
 workspace is created with, named by `starterProposalId` in the creation
@@ -108,57 +111,68 @@ answer): the floor carries move proposals and nothing else.
 **The move question and the floor's text are set at provisioning**, so a
 floor made again reads the same. The workspace's option question
 (`optionQuestionTemplate`), verbatim: **"If the move {option} is made, what
-will {workspace}'s final {metric} be?"**, never the platform default "With
+will my {metric} be {date}?"**, never the platform default "With
 {option}, ...", which reads a move as a noun phrase. The workspace's about
 text (`subjectAbout`): who plays and where (the Lichess account, linked), one
-proposal a turn with every legal move an option, the score each option is
-priced on, the highest price played two seconds before the deadline with the
-rest voided and refunded, a tie random, every open book settled at the result,
+proposal a turn with every legal move an option, the rating each option is
+priced on and when it is read, the highest price played two seconds before the deadline with the
+rest voided and refunded, a tie random, every book settled on the rating at its time,
 then a link to [How to trade with a bot](trading.md).
 
-**One book per game.** The score has a value only when a game has finished:
-100, 50 or 0, read from the finished state. While a game runs the metric
-stays at the last game's result; the operator posts no reading at the
-start, and 50 appears only after a draw. When a game starts it sets the
-metric's only horizon to `until-settled`, with
-`horizonTitles: { "until-settled": "when the game ends" }`, and forces the
-workspace's market refresh. Every proposal of the game is priced on that
-book. In date customization this is "When I settle it" with a custom title;
-the operator performs that settlement automatically at game end. A running
-game restored from an older calendar configuration finishes on its original
-book; the next game adopts the new horizon.
+**Books on the half hour.** Every book, the main one and each move's, is
+priced on the rating at a **mark**: a minute cell on the half-hour grid
+(`YYYY-MM-DDTHH:00` or `HH:30`, UTC). The **target** at any moment is the
+first mark at least 30 minutes away, so a move posted at 12:10 is priced on
+the rating at 13:00 and one posted at 12:40 on the rating at 13:30: between
+30 and 60 minutes on. A game lasts about five minutes, so a move's game and
+the few after it are over by its mark. The target is the metric's only
+horizon, titled `at HH:MM UTC`
+(`horizonTitles: { "<cell>": "at 13:00 UTC" }`). On every tick, game or no
+game, the operator compares the target with the horizon it last wrote; when
+they differ it writes the new one and forces the workspace's market
+refresh, so the main book of a mark is open from the moment it becomes the
+target. A refusal is logged and tried again on the next tick. The mark that
+stopped being the target keeps its books: Telarchy leaves a traded main
+book open until its time and returns an untraded one's credits, and a
+chosen move's book settles on its own date either way.
 
-**The end settles it, before anything else starts.** The moment Lichess
-reports the game finished, the operator posts the score as the metric's
-reading and settles the metric at it (`POST /api/metrics/:id/settle`,
-reason `Game G vs <opponent>: <win|draw|loss>`), which settles the main book
-and every chosen option's book of that game at once. A refused settlement
-is retried every minute, and **no new game is sought or accepted until it
-has gone through**: an early settlement settles every open book on the
-metric, so it may only run while that game's books are the only ones open.
+**The rating at a mark** is the last rating the operator recorded at or
+before the mark's first instant. The operator records the rating, with the
+time it read it, whenever the account read shows a number different from
+the last one recorded (the account is read once a minute and right after a
+game ends); the record is kept in the saved state, the last 200 entries. A
+game still running at the mark has not moved the rating, so the mark reads
+the rating from before it.
 
-**Every game's book opens at 50.** The score has no running reading, so a
-book opened at the metric's value would open at the last game's result: 0.1
-after a loss, a call nobody made. At a game's end, BEFORE the reading and
-the settlement (the platform opens the next book as soon as this one
-settles), the operator sets the metric's `opensAt` to 50, the middle of the
-score; the settlement itself is always the game's real score. An aborted
-game has no score and sets nothing. A refusal is logged and the end goes on.
+**A mark settles when it arrives.** On the first tick at or after a mark
+that was a target, once the account has been read after the mark's
+instant, the operator posts the rating at the mark as the metric's reading
+stamped at the mark's first instant (`asOf`, which is what places it
+inside the minute cell) and calls `POST /api/predictions/resolve`, which
+settles the mark's main book and every chosen move's book on it at once. A
+failure is retried on every tick until it goes through, after a restart
+too (Telarchy gives up on a cell only after 24 hours), and the reading is
+always the rating at the mark, never the rating at the retry. Marks
+wait in the saved state until settled; one still unsettled 24 hours after
+its instant is dropped and said, Telarchy having given up on it. **The operator never calls the
+metric's early settlement**: it settles every open book on the metric, and
+here books of two marks are open at once. A game's end settles nothing: it
+moves the rating, and the rating is read at the marks. The operator posts
+no other reading: one stamped later inside a mark's minute would replace
+the mark's own.
 
 **Opening prices are Telarchy's rule, unchanged**: every option book opens
 at the main book's current value (Viktor, 2026-09-13). The operator never
 trades to move them.
 
-**Liquidity.** The metric's credits on the cell: 6,000 for the main book,
-2,000 per option book, from the owner's proposal credits (never the
-proposer's). That is twice the snake's, because a chess move also waits on the
-opponent and so a book here is open about twice as long for the same
-decision. A move with 35 legal moves puts 70,000 credits out and gets 68,000
-back when the other options void; the chosen book's 2,000 stays out until the
-game ends. The operator's float must cover the widest move (218 legal moves,
-436,000) plus a game's chosen books, and what traders win off those books is
-the only thing that draws it down. The operator sets these on the metric at
-the start of each game, so a change takes effect with the next game.
+**Liquidity.** The metric's credits on the target cell: 6,000 for the main
+book, 2,000 per option book, from the owner's proposal credits (never the
+proposer's). A move with 35 legal moves puts 70,000 credits out and gets
+68,000 back when the other options void; the chosen book's 2,000 stays out
+until its mark, at most an hour. The operator's float must cover the widest
+move (218 legal moves, 436,000) plus an hour's chosen books, and what
+traders win off those books is the only thing that draws it down. The
+operator writes these with every horizon it writes.
 
 ## The move
 
@@ -239,8 +253,7 @@ operator except through this rule.
 
 A failed decline is retained in the saved state and retried once a minute,
 including after restart. It never becomes a retrospective approval. Until
-all abandoned proposals are closed, no new game starts and a finished
-game is not settled. An already closed proposal completes cleanup;
+all abandoned proposals are closed, no new game starts. An already closed proposal completes cleanup;
 an unavailable endpoint or unknown proposal stays queued for retry.
 Each tick processes at most one queued closure, after its current move.
 
@@ -258,8 +271,7 @@ listed is present; a value not known yet is `null`.
 
 `GET /state`, `schema: 1`:
 
-- `phase`: `our-move` (a proposal is open), `their-move`, `settling` (the
-  game is over and its settlement has not gone through), `paused` (idle,
+- `phase`: `our-move` (a proposal is open), `their-move`, `paused` (idle,
   the platform cannot price a game; "The search pauses" above),
   `seeking` (idle, looking for a game).
 - `paused`: null, or `{ since, reason }` while the search is paused.
@@ -277,12 +289,13 @@ listed is present; a value not known yet is `null`.
   openedAt, decideAt, deadline, tradeable, quotesAt, options: [{ id, san,
   price, lead, marketId, reason? }] }`, options in proposal order, `reason`
   saying why a price is missing (`not polled yet` before the first poll).
-- `cell`, `cellEndsAt`: the game's book. `cell` is `until-settled` and
-  `cellEndsAt` is null for a game without a calendar deadline.
-- `call`: the game's main book, `{ marketId, value, history: [{ at, value }]
-  }`: the book's consensus now and after each trade since the game started,
-  oldest first, at most 300 points; null before the first read of a game and
-  between games.
+- `cell`, `cellEndsAt`: the target mark new books are priced on, as the
+  minute cell (`2026-09-19T13:00`) and the instant that minute ends.
+- `marksPending`: the marks that were targets and have not settled yet,
+  oldest first.
+- `call`: the target mark's main book, `{ marketId, value, history: [{ at, value }]
+  }`: the book's consensus now and after each trade,
+  oldest first, at most 300 points; null before the first read.
 - `recentTrades`: the last 20 trades on this game's books, newest first,
   `{ id, at, handle, side: "buy" | "sell", direction: "higher" | "lower",
   credits, book: "game" | "move", san, move, price }`: `san` and `move` name
@@ -361,8 +374,8 @@ nothing is green, because the tie is broken at random.
 **The right column** (from x 736, 520 px wide), top to bottom:
 
 1. the Telarchy lockup, 18 px tall at its own aspect ratio;
-2. "Chess" in Fraunces 700 with the question "What score will I reach this
-   game?" (the metric's own, above) beside it on the same line in Fraunces
+2. "Chess" in Fraunces 700 with the question "What will my Lichess rating be
+   in half an hour?" beside it on the same line in Fraunces
    500, muted;
 3. three cells between hairlines, each a small mono uppercase label over a
    large mono value: the player's name and rating over its clock, the
@@ -371,7 +384,7 @@ nothing is green, because the tie is broken at random.
    - `our-move`: `NEXT MOVE` over the countdown to `open.decideAt` in the
      accent, "deciding" once it has run out;
    - `their-move`: `THEIR MOVE` over "thinking", muted;
-   - `settling`, or a game with a `result`: `GAME OVER` over "won" in
+   - a game with a `result`: `GAME OVER` over "won" in
      green, "lost" in red (`#f87171`) or "drawn";
    - `seeking` with no result to show: `NEXT GAME` over "seeking", muted.
 
@@ -386,11 +399,13 @@ nothing is green, because the tie is broken at random.
    WON 0 · LOST 10 · DRAWN 0` (`?` while provisional), absent while
    `player` is null;
 5. **the market's call**: the label `MARKET'S CALL` with the call now at
-   the right in the accent (one decimal), over a graph of `call.history`
+   the right in the accent (a whole number), over a graph of `call.history`
    ending at `call.value`: the line in the accent over a faint fill of it, a
-   dot on the newest point, hairlines at 25, 50 and 75 with 50 the brighter,
-   their values in small mono at the right. The vertical scale is always 0
-   to 100, the metric's own range, so a graph reads the same in every game.
+   dot on the newest point. The vertical scale is 80 rating points tall,
+   centred on the player's rating rounded to the nearest ten (on
+   `call.value` while `player` is null), with hairlines at the centre and 20
+   above and below it, the centre the brighter, their values in small mono
+   at the right; a point outside the scale is drawn on its edge.
    Fewer than two points draw the level as a flat line. With no `call` the
    graph is empty and the value reads `-`;
 6. **the leading moves**, three rows between hairlines:
@@ -401,7 +416,7 @@ nothing is green, because the tie is broken at random.
      full track), and its price. The leader's SAN, bar and price are green;
      with a tie at the top nothing is green;
    - otherwise `LAST DECISION`: the newest decision of this game as "Move 6:
-     O-O, chosen at 56.4 of 100" ("chosen at random" when its kind is not
+     O-O, chosen at 56.4" ("chosen at random" when its kind is not
      `market` or it has no price), and under it who is thought about:
      "Waiting for OppBot (2171) to reply", "Game over" once it has a result,
      or, with no decision yet in this game, "Waiting for the first move";
@@ -469,10 +484,11 @@ These tests are started by a person and by nothing else: they are not part of
   exactly the legal moves of the position.
 - The option with the highest price is chosen; a tie is random among the
   tied.
-- The player is in at most one game at a time, and starts or accepts none
-  while a finished game's settlement is pending.
+- The player is in at most one game at a time.
 - No new game is sought or accepted while the platform cannot price one.
-- A finished game settles the metric at 100, 50 or 0, once.
+- Every book is priced on a mark at least 30 minutes after it opens.
+- A mark settles on the rating at its first instant, once, and the
+  operator never settles the metric early.
 - The operator account never trades, never offers or accepts a draw, never
   resigns.
 - The feed never shows a price the workspace did not report.

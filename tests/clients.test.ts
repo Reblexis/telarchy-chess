@@ -32,22 +32,19 @@ const CELL = '2026-09-14T14:00';
 describe('the Telarchy client', () => {
   const base = { baseUrl: 'https://telarchy.com/beta/api', workspaceId: 'ws1', metricId: 'm1', workspaceUrl: 'https://telarchy.com/beta/chess' };
 
-  it('reads game-end prices from the no-deadline response even without a targetDate', async () => {
-    const { f } = fakeFetch(() => ({ body: { markets: [
-      { resolvesOn: '2026-09-14T14:01:00.000Z', options: [{ id: 'e2e4', consensus: 1, marketId: 'wrong' }] },
-      { resolvesOn: '9999-12-31T00:00:00Z', options: [{ id: 'e2e4', consensus: 55, marketId: 'right' }] },
-    ] } }));
-    const c = new HttpTelarchyClient({ ...base, apiKey: 'k1' }, f);
-    expect(await c.readPrices({ id: 'p1', number: 1, url: '' }, 'until-settled')).toMatchObject({ e2e4: { price: 55, marketId: 'right' } });
-  });
-  it('names the game-end horizon without a calendar deadline', async () => {
+  it('the horizon is the mark alone, titled with its clock time, at the documented depth', async () => {
     const { f, reqs } = fakeFetch(() => ({ body: {} }));
     const c = new HttpTelarchyClient({ ...base, apiKey: 'k1' }, f);
-    await c.setHorizon('until-settled');
-    expect(JSON.parse(reqs[0].body!).timePreference).toMatchObject({
-      customHorizons: ['until-settled'],
-      horizonTitles: { 'until-settled': 'when the game ends' },
-    });
+    await c.setHorizon('2026-09-13T15:30');
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].method).toBe('PUT');
+    expect(reqs[0].url.endsWith('/metrics/m1')).toBe(true);
+    expect(JSON.parse(reqs[0].body!)).toEqual({ timePreference: {
+      enabled: false,
+      customHorizons: ['2026-09-13T15:30'],
+      horizonTitles: { '2026-09-13T15:30': 'at 15:30 UTC' },
+      horizonCredits: { '2026-09-13T15:30': { book: 6000, proposal: 2000 } },
+    } });
   });
   it('an agent key goes in X-Agent-Key with the workspace header', async () => {
     const { f, reqs } = fakeFetch(() => ({ status: 201, body: { id: 'p9', number: 9 } }));
@@ -125,27 +122,29 @@ describe('the Telarchy client', () => {
     await expect(c.approveOption({ id: 'p1', number: 1, url: '' }, 'e2e4')).rejects.toThrow(/409 proposal_closed/);
   });
 
-  it('the horizon, the reading and the settlement name the metric', async () => {
-    const { f, reqs } = fakeFetch(r => (r.method === 'GET' ? { body: { timePreference: { horizonCredits: {} } } } : { body: {} }));
-    const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, f);
-    await c.setHorizon(CELL);
-    await c.postReading(100, new Date('2026-09-13T15:00:00Z'));
-    await c.settleMetric(100, new Date('2026-09-13T15:00:00Z'), 'Game 1 vs X: win');
-    const put = reqs.find(r => r.method === 'PUT' && r.body?.includes('customHorizons'))!;
-    expect(JSON.parse(put.body!).timePreference).toEqual({ enabled: false, customHorizons: [CELL], horizonCredits: { [CELL]: { book: 6000, proposal: 2000 } } });
-    expect(JSON.parse(reqs.find(r => r.body?.includes('"value":100') && r.method === 'PUT')!.body!)).toMatchObject({ value: 100, asOf: '2026-09-13T15:00:00.000Z' });
-    const settle = reqs.find(r => r.url.endsWith('/metrics/m1/settle'))!;
-    expect(JSON.parse(settle.body!)).toEqual({ value: 100, asOf: '2026-09-13T15:00:00.000Z', reason: 'Game 1 vs X: win' });
-  });
-
-  it('the opening value is a PUT of opensAt on the metric, and nothing else', async () => {
+  it('A MARK SETTLES ON THE RATING AT ITS FIRST INSTANT: the reading is a PUT of the value stamped asOf the mark', async () => {
     const { f, reqs } = fakeFetch(() => ({ body: {} }));
     const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, f);
-    await c.setOpensAt(33.3);
+    await c.postReading(1554, new Date('2026-09-13T15:00:00Z'));
     expect(reqs).toHaveLength(1);
     expect(reqs[0].method).toBe('PUT');
     expect(reqs[0].url.endsWith('/metrics/m1')).toBe(true);
-    expect(JSON.parse(reqs[0].body!)).toEqual({ opensAt: 33.3 });
+    expect(JSON.parse(reqs[0].body!)).toMatchObject({ value: 1554, asOf: '2026-09-13T15:00:00.000Z' });
+  });
+
+  it('resolving is one POST to predictions/resolve with the agent key', async () => {
+    const { f, reqs } = fakeFetch(() => ({ body: { resolved: 3 } }));
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, f);
+    await c.resolveBooks();
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].method).toBe('POST');
+    expect(reqs[0].url.endsWith('/predictions/resolve')).toBe(true);
+  });
+
+  it('THE OPERATOR NEVER SETTLES THE METRIC EARLY: the client cannot call the settlement or set an opening value', () => {
+    const c = new HttpTelarchyClient({ ...base, apiKey: 'k' }, (async () => new Response('{}')) as any);
+    expect((c as any).settleMetric).toBeUndefined();
+    expect((c as any).setOpensAt).toBeUndefined();
   });
 
   it('the operator client has no way to trade', () => {

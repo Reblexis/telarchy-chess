@@ -15,15 +15,23 @@ function fakes(opts: {
   prices?: (proposalNumber: number) => Prices;
   failPost?: boolean;
   failApprove?: boolean;
-  failOpensAt?: boolean;
-  settleFailures?: number;
+  horizonFailures?: number;
+  readingFailures?: number;
+  resolveFailures?: number;
+  rating?: () => number;
+  failAccount?: () => boolean;
   bots?: unknown[];
 } = {}) {
   const calls: Call[] = [];
   let n = 0;
-  let settleFails = opts.settleFailures ?? 0;
+  let horizonFails = opts.horizonFailures ?? 0;
+  let readingFails = opts.readingFailures ?? 0;
+  let resolveFails = opts.resolveFailures ?? 0;
   const telarchy: TelarchyClient = {
-    async setHorizon(cell) { calls.push({ name: 'setHorizon', args: [cell] }); },
+    async setHorizon(cell) {
+      calls.push({ name: 'setHorizon', args: [cell] });
+      if (horizonFails > 0) { horizonFails--; throw new Error('PUT /metrics -> 500'); }
+    },
     async refreshBooks() { calls.push({ name: 'refreshBooks', args: [] }); },
     async postProposal(title, description, decideBy, options) {
       calls.push({ name: 'postProposal', args: [title, description, decideBy.toISOString(), options] });
@@ -31,8 +39,8 @@ function fakes(opts: {
       n++;
       return { id: `p${n}`, number: n, url: `https://telarchy.com/beta/chess/p/${n}` };
     },
-    async readPrices(ref) {
-      calls.push({ name: 'readPrices', args: [ref.id] });
+    async readPrices(ref, cell) {
+      calls.push({ name: 'readPrices', args: [ref.id, cell] });
       return opts.prices ? opts.prices(ref.number) : {};
     },
     async approveOption(ref, option) {
@@ -40,14 +48,13 @@ function fakes(opts: {
       if (opts.failApprove) throw new Error('approve -> 409 proposal_closed');
     },
     async declineProposal(ref) { calls.push({ name: 'declineProposal', args: [ref.id] }); },
-    async setOpensAt(value) {
-      calls.push({ name: 'setOpensAt', args: [value] });
-      if (opts.failOpensAt) throw new Error('PUT /metrics -> 400 No fields to update');
+    async postReading(value, when) {
+      calls.push({ name: 'postReading', args: [value, when.toISOString()] });
+      if (readingFails > 0) { readingFails--; throw new Error('PUT /metrics -> 500'); }
     },
-    async postReading(value, when) { calls.push({ name: 'postReading', args: [value, when.toISOString()] }); },
-    async settleMetric(value, when, reason) {
-      calls.push({ name: 'settleMetric', args: [value, when.toISOString(), reason] });
-      if (settleFails > 0) { settleFails--; throw new Error('settle -> 500'); }
+    async resolveBooks() {
+      calls.push({ name: 'resolveBooks', args: [] });
+      if (resolveFails > 0) { resolveFails--; throw new Error('resolve -> 500'); }
     },
   };
   const lichess: LichessClient = {
@@ -60,7 +67,8 @@ function fakes(opts: {
     async onlineBots() { calls.push({ name: 'onlineBots', args: [] }); return (opts.bots ?? []) as never; },
     async account() {
       calls.push({ name: 'account', args: [] });
-      return { username: ME, url: 'https://lichess.org/@/TelarchyRookie', rating: 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 } };
+      if (opts.failAccount?.()) throw new Error('account -> 503');
+      return { username: ME, url: 'https://lichess.org/@/TelarchyRookie', rating: opts.rating ? opts.rating() : 1500, provisional: true, games: { played: 6, won: 0, lost: 6, drawn: 0 } };
     },
   };
   const names = () => calls.map(c => c.name);
@@ -110,20 +118,73 @@ describe('challenges', () => {
   });
 });
 
-describe('a game opens its book', () => {
-  it('THE SCORE HAS A VALUE ONLY WHEN A GAME HAS FINISHED: a new game posts no reading, never a 50', async () => {
+describe('books on the half hour', () => {
+  it('EVERY BOOK IS PRICED ON A MARK AT LEAST 30 MINUTES AFTER IT OPENS: the first tick writes the target as the horizon and refreshes the books', async () => {
     const f = fakes();
-    const op = operator(f);
-    await op.onGameFull(full('black'), T0);
-    await op.onGameFull(full('black'), at(30));
-    expect(f.of('postReading')).toEqual([]);
-    expect(f.names()).toContain('setHorizon');
-  });
-  it('the start sets the metric horizon to the cell 24 hours out and refreshes the books', async () => {
-    const f = fakes();
-    await operator(f).onGameFull(full('black'), T0);
-    expect(f.of('setHorizon')).toEqual([{ name: 'setHorizon', args: ['until-settled'] }]);
+    await operator(f).tick(at(600)); // 14:10
+    expect(f.of('setHorizon')).toEqual([{ name: 'setHorizon', args: ['2026-09-13T15:00'] }]);
     expect(f.names().indexOf('refreshBooks')).toBeGreaterThan(f.names().indexOf('setHorizon'));
+  });
+  it('the same target is written once, game or no game; the next half hour writes the next', async () => {
+    const f = fakes();
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    await op.tick(at(601));
+    await op.onGameFull(full('black'), at(700));
+    await op.tick(at(1799)); // 14:29:59
+    expect(f.of('setHorizon')).toHaveLength(1);
+    await op.tick(at(1801)); // 14:30:01
+    expect(f.of('setHorizon').map(c => c.args[0])).toEqual(['2026-09-13T15:00', '2026-09-13T15:30']);
+    expect(f.of('refreshBooks')).toHaveLength(2);
+  });
+  it('a refused horizon is tried again on the next tick', async () => {
+    const f = fakes({ horizonFailures: 2 });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600)); await op.tick(at(601));
+    expect(f.of('refreshBooks')).toHaveLength(0);
+    await op.tick(at(602)); await op.tick(at(603));
+    expect(f.of('setHorizon')).toHaveLength(3);
+    expect(f.of('refreshBooks')).toHaveLength(1);
+  });
+  it('a game starting writes no horizon of its own and posts no reading', async () => {
+    const f = fakes();
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    await op.onGameFull(full('black'), at(700));
+    expect(f.of('setHorizon')).toHaveLength(1);
+    expect(f.of('postReading')).toEqual([]);
+  });
+  it('a move posted before any tick wrote the target writes it first, then posts', async () => {
+    const f = fakes();
+    await operator(f).onGameFull(full('white'), at(600));
+    const n = f.names();
+    expect(f.of('setHorizon')).toEqual([{ name: 'setHorizon', args: ['2026-09-13T15:00'] }]);
+    expect(n.indexOf('setHorizon')).toBeLessThan(n.indexOf('refreshBooks'));
+    expect(n.indexOf('refreshBooks')).toBeLessThan(n.indexOf('postProposal'));
+  });
+  it('the target does not move under an open move: its prices are read on the mark it was posted on, and the roll waits for the decision', async () => {
+    const f = fakes({ prices: () => ({ e2e4: { price: 1570, lead: 8 } }) });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(1700));
+    await op.onGameFull(full('white'), at(1790)); // 14:29:50, a 20 second first move
+    await op.tick(at(1801)); // 14:30:01, the move still open
+    expect(f.of('setHorizon')).toHaveLength(1);
+    expect(f.calls.filter(c => c.name === 'readPrices').every(c => c.args[1] === '2026-09-13T15:00')).toBe(true);
+    await op.tick(at(1808)); // decided
+    expect(f.of('move')).toEqual([{ name: 'move', args: ['g1', 'e2e4'] }]);
+    await op.tick(at(1809));
+    expect(f.of('setHorizon').map(c => c.args[0])).toEqual(['2026-09-13T15:00', '2026-09-13T15:30']);
+    expect(f.calls.filter(c => c.name === 'readPrices').every(c => c.args[1] === '2026-09-13T15:00')).toBe(true);
+  });
+  it('the feed names the target and the marks not settled yet', async () => {
+    const f = fakes();
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    await op.tick(at(1801));
+    const s = op.publicState(at(1802));
+    expect(s.cell).toBe('2026-09-13T15:30');
+    expect(s.cellEndsAt).toBe('2026-09-13T15:31:00.000Z');
+    expect(s.marksPending).toEqual(['2026-09-13T15:00', '2026-09-13T15:30']);
   });
 });
 
@@ -281,57 +342,23 @@ describe('two seconds before the deadline the market decides', () => {
   });
 });
 
-describe('the end settles the game, before anything else starts', () => {
-  it('a win posts 100 and settles the metric at 100 with the reason', async () => {
+describe('a game\'s end settles nothing', () => {
+  it('a finished game keeps its result, posts no reading, and the next game may start at once', async () => {
     const f = fakes();
     const op = operator(f);
     await op.onGameFull(full('black'), T0);
     await op.onGameState(st('f2f3 e7e5 g2g4 d8h4', { status: 'mate', winner: 'black' }), at(90));
-    expect(f.of('postReading').at(-1)).toEqual({ name: 'postReading', args: [100, at(90).toISOString()] });
-    expect(f.of('settleMetric')).toEqual([{ name: 'settleMetric', args: [100, at(90).toISOString(), 'Game 1 vs OppBot: win'] }]);
+    expect(op.publicState(at(91)).game?.result).toBe(100);
+    expect(f.of('postReading')).toEqual([]);
+    expect(f.of('resolveBooks')).toEqual([]);
     expect(op.publicState(at(91)).phase).toBe('seeking');
+    await op.onChallenge(challenge({ id: 'c10' }), at(130));
+    expect(f.of('accept')).toEqual([{ name: 'accept', args: ['c10'] }]);
   });
-  it('EVERY GAME\'S BOOK OPENS AT 50, WHATEVER THE LAST RESULT: set before the reading and the settlement', async () => {
+  it('THE OPERATOR NEVER SETTLES THE METRIC EARLY: the client has no such call', () => {
     const f = fakes();
-    const op = operator(f);
-    await op.onGameFull(full('black'), T0);
-    await op.onGameState(st('f2f3 e7e5 g2g4 d8h4', { status: 'mate', winner: 'black' }), at(90));
-    expect(f.of('setOpensAt')).toEqual([{ name: 'setOpensAt', args: [50] }]);
-    expect(f.names().indexOf('setOpensAt')).toBeLessThan(f.names().indexOf('postReading'));
-    expect(f.names().indexOf('setOpensAt')).toBeLessThan(f.names().indexOf('settleMetric'));
-  });
-  it('it is 50 after a win and after every loss, never an average; an aborted game sets nothing', async () => {
-    const f = fakes();
-    const op = operator(f);
-    await op.onGameFull(full('black'), T0);
-    await op.onGameState(st('f2f3 e7e5 g2g4 d8h4', { status: 'mate', winner: 'black' }), at(90)); // 100
-    await op.onGameFull(full('white', { id: 'g2' }), at(200));
-    await op.onGameState(st('', { status: 'aborted' }), at(210)); // no score
-    await op.onGameFull(full('white', { id: 'g3' }), at(300));
-    await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(330)); // 0
-    await op.onGameFull(full('white', { id: 'g4' }), at(400));
-    await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(430)); // 0
-    expect(f.of('setOpensAt').map(c => c.args[0])).toEqual([50, 50, 50]);
-  });
-  it('a refused opening value is logged and the end still settles', async () => {
-    const f = fakes({ failOpensAt: true });
-    const op = operator(f);
-    await op.onGameFull(full('white'), T0);
-    await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(30));
-    expect(f.of('settleMetric')).toHaveLength(1);
-    expect(op.publicState(at(31)).phase).toBe('seeking');
-  });
-  it('a loss is 0 and a draw 50', async () => {
-    const f = fakes();
-    const op = operator(f);
-    await op.onGameFull(full('white'), T0);
-    await op.onGameState(st('', { status: 'resign', winner: 'black' }), at(30));
-    expect(f.of('settleMetric')[0].args[0]).toBe(0);
-    const g = fakes();
-    const op2 = operator(g);
-    await op2.onGameFull(full('black'), T0);
-    await op2.onGameState(st('e2e4', { status: 'draw' }), at(30));
-    expect(g.of('settleMetric')[0].args).toEqual([50, at(30).toISOString(), 'Game 1 vs OppBot: draw']);
+    expect((f.telarchy as any).settleMetric).toBeUndefined();
+    expect((f.telarchy as any).setOpensAt).toBeUndefined();
   });
   it('a game that ends while our proposal is open declines it and plays nothing', async () => {
     const f = fakes();
@@ -342,32 +369,134 @@ describe('the end settles the game, before anything else starts', () => {
     expect(f.of('declineProposal')).toEqual([{ name: 'declineProposal', args: ['p1'] }]);
     expect(f.of('move')).toHaveLength(0);
   });
-  it('an aborted game settles nothing', async () => {
-    const f = fakes();
-    const op = operator(f);
-    await op.onGameFull(full('black'), T0);
-    await op.onGameState(st('', { status: 'aborted' }), at(40));
-    expect(f.of('settleMetric')).toHaveLength(0);
-    expect(f.of('postReading')).toEqual([]); // an aborted game has no score
-    expect(f.of('setOpensAt')).toEqual([]);
+});
+
+describe('a mark settles when it arrives, on the rating at its first instant', () => {
+  const MARK = '2026-09-13T15:00:00.000Z';
+  it('the rating is recorded when the account shows a new number, never twice for the same one', async () => {
+    let r = 1562;
+    const f = fakes({ rating: () => r });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    await op.tick(at(661));
+    r = 1554;
+    await op.tick(at(722));
+    await op.tick(at(783));
+    expect(op.ratings).toEqual([
+      { at: at(600).toISOString(), rating: 1562 },
+      { at: at(722).toISOString(), rating: 1554 },
+    ]);
   });
-  it('a refused settlement blocks every new game and is retried each minute until it goes through', async () => {
-    const f = fakes({ settleFailures: 2 });
-    const op = operator(f);
-    await op.onGameFull(full('black'), T0);
-    await op.onGameState(st('e2e4', { status: 'resign', winner: 'white' }), at(60));
-    expect(op.publicState(at(61)).phase).toBe('settling');
-    await op.onChallenge(challenge({ id: 'c9' }), at(70));
-    expect(f.of('decline')).toEqual([{ name: 'decline', args: ['c9', 'later'] }]);
-    await op.tick(at(100));
-    expect(f.of('settleMetric')).toHaveLength(1); // not before a minute has passed
-    await op.tick(at(121));
-    expect(f.of('settleMetric')).toHaveLength(2);
-    await op.tick(at(182));
-    expect(f.of('settleMetric')).toHaveLength(3);
-    expect(op.publicState(at(183)).phase).toBe('seeking');
-    await op.onChallenge(challenge({ id: 'c10' }), at(190));
-    expect(f.of('accept')).toEqual([{ name: 'accept', args: ['c10'] }]);
+  it('the record keeps its last 200 entries', async () => {
+    let r = 1000;
+    const f = fakes({ rating: () => ++r });
+    const op = operator(f, seq(0), false);
+    for (let i = 0; i < 230; i++) await op.tick(at(600 + i * 61));
+    expect(op.ratings).toHaveLength(200);
+    expect(op.ratings.at(-1)!.rating).toBe(1230);
+  });
+  it('A MARK SETTLES ON THE RATING AT ITS FIRST INSTANT: the reading is stamped on the mark, then the books are resolved', async () => {
+    let r = 1562;
+    const f = fakes({ rating: () => r });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600)); // target 15:00, rating 1562
+    r = 1554; await op.tick(at(2000)); // a loss at 14:33
+    await op.tick(at(3599)); // 14:59:59
+    expect(f.of('postReading')).toEqual([]);
+    await op.tick(at(3605)); // 15:00:05, the account read again after the instant
+    expect(f.of('postReading')).toEqual([{ name: 'postReading', args: [1554, MARK] }]);
+    expect(f.names().indexOf('resolveBooks')).toBeGreaterThan(f.names().indexOf('postReading'));
+    expect(op.publicState(at(3602)).marksPending).not.toContain('2026-09-13T15:00');
+    await op.tick(at(3700));
+    expect(f.of('postReading')).toHaveLength(1);
+    expect(f.of('resolveBooks')).toHaveLength(1);
+  });
+  it('a rating that moved after the mark never reaches it: the account is read after the instant, and what it shows then belongs to the next mark', async () => {
+    let r = 1562;
+    const f = fakes({ rating: () => r });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    await op.tick(at(3590)); // read at 14:59:50, still 1562
+    r = 1570; // a win lands at 15:00:00.5
+    await op.tick(at(3601));
+    expect(f.of('postReading')).toEqual([{ name: 'postReading', args: [1562, MARK] }]);
+    expect(op.ratings.at(-1)).toEqual({ at: at(3601).toISOString(), rating: 1570 });
+  });
+  it('a mark waits for an account read after its instant: a failing read holds it, the first good one lets it go', async () => {
+    let down = false;
+    const f = fakes({ failAccount: () => down });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    down = true;
+    await op.tick(at(3601)); await op.tick(at(3607));
+    expect(f.of('postReading')).toEqual([]);
+    down = false;
+    await op.tick(at(3613));
+    expect(f.of('postReading')).toEqual([{ name: 'postReading', args: [1500, MARK] }]);
+  });
+  it('a refused reading or a refused resolve is retried on every tick with the same rating and the same stamp, never the rating at the retry', async () => {
+    let r = 1562;
+    const f = fakes({ rating: () => r, readingFailures: 1, resolveFailures: 1 });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    await op.tick(at(3601)); // reading refused
+    r = 1540;
+    await op.tick(at(3665)); // reading ok, resolve refused
+    await op.tick(at(3666)); // both ok
+    expect(f.of('postReading').map(c => c.args)).toEqual([[1562, MARK], [1562, MARK], [1562, MARK]]);
+    expect(f.of('resolveBooks')).toHaveLength(2);
+    expect(op.publicState(at(3667)).marksPending).not.toContain('2026-09-13T15:00');
+    await op.tick(at(3668));
+    expect(f.of('postReading')).toHaveLength(3);
+  });
+  it('a game still running at the mark has not moved the rating', async () => {
+    let r = 1562;
+    const f = fakes({ rating: () => r });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    await op.onGameFull(full('black'), at(3500));
+    await op.tick(at(3601));
+    expect(f.of('postReading')).toEqual([{ name: 'postReading', args: [1562, MARK] }]);
+  });
+  it('marks and the rating record survive a restart, and a mark missed while down settles on the rating it had, stamped on the mark', async () => {
+    let r = 1562;
+    const f = fakes({ rating: () => r });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600));
+    const saved = JSON.parse(JSON.stringify(op));
+    r = 1580; // games went on somewhere while we were down; unknown to the record
+    const g = fakes({ rating: () => r });
+    const back = Operator.fromJSON(g.telarchy, g.lichess, seq(0), { username: ME, seek: false, workspaceId: 'ws-chess' }, saved);
+    await back.tick(at(5000)); // 15:23
+    expect(g.of('postReading')).toEqual([{ name: 'postReading', args: [1562, MARK] }]);
+    expect(g.of('setHorizon')).toEqual([{ name: 'setHorizon', args: ['2026-09-13T16:00'] }]);
+  });
+  it('two marks due at once settle oldest first, each on its own rating, with one resolve', async () => {
+    let r = 1562;
+    const f = fakes({ rating: () => r });
+    const op = operator(f, seq(0), false);
+    await op.tick(at(600)); // target 15:00
+    r = 1550; await op.tick(at(1801)); // target 15:30, rating 1550 from 14:30:01
+    r = 1544; await op.tick(at(3700)); // 15:01:40: settles 15:00 on 1550
+    r = 1530;
+    const saved = JSON.parse(JSON.stringify(op));
+    const g = fakes({ rating: () => r });
+    const back = Operator.fromJSON(g.telarchy, g.lichess, seq(0), { username: ME, seek: false, workspaceId: 'ws-chess' }, saved);
+    await back.tick(at(9100)); // 16:31:40: 15:30 and 16:00 both due
+    expect(g.of('postReading').map(c => c.args)).toEqual([[1544, '2026-09-13T15:30:00.000Z'], [1544, '2026-09-13T16:00:00.000Z']]);
+    expect(g.of('resolveBooks')).toHaveLength(1);
+  });
+  it('a mark with no rating recorded by its instant is held and said, and dropped after 24 hours, when Telarchy has given up on it', async () => {
+    const f = fakes();
+    const op = Operator.fromJSON(f.telarchy, f.lichess, seq(0), { username: ME, seek: false, workspaceId: 'ws-chess' },
+      { marks: ['2026-09-13T13:00'], ratings: [] } as any);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await op.tick(at(600));
+    expect(f.of('postReading')).toEqual([]);
+    expect(err.mock.calls.flat().join(' ')).toContain('2026-09-13T13:00');
+    await op.tick(at(24 * 3600 - 3000));
+    expect(op.publicState(at(24 * 3600)).marksPending).not.toContain('2026-09-13T13:00');
+    err.mockRestore();
   });
 });
 
@@ -443,16 +572,16 @@ describe('a restart', () => {
   it('declines a proposal left open and posts a fresh one when the stream says it is our turn', async () => {
     const f = fakes();
     const op = operator(f);
-    await op.onGameFull(full('white'), T0);
+    await op.onGameFull(full('white'), at(60));
     const saved = JSON.parse(JSON.stringify(op.toJSON()));
     const g = fakes();
     const back = Operator.fromJSON(g.telarchy, g.lichess, seq(0), { username: ME, seek: true, workspaceId: 'ws-chess' }, saved);
-    await back.resume(at(30));
+    await back.resume(at(90));
     expect(g.of('declineProposal')).toEqual([{ name: 'declineProposal', args: ['p1'] }]);
-    await back.onGameFull(full('white'), at(31));
+    await back.onGameFull(full('white'), at(91));
     expect(g.of('postProposal')).toHaveLength(1);
-    expect(g.of('setHorizon')).toHaveLength(0); // same game, its book already exists
-    expect(back.publicState(at(32)).game?.number).toBe(1);
+    expect(g.of('setHorizon')).toHaveLength(0); // the target it had already written survives the restart
+    expect(back.publicState(at(92)).game?.number).toBe(1);
   });
 });
 
@@ -470,9 +599,9 @@ describe('the feed', () => {
     expect(s.open?.options.find(o => o.id === 'e2e4')).toMatchObject({ san: 'e4', price: 55, lead: 2, marketId: 'm-e2e4' });
     expect(s.open?.options.find(o => o.id === 'a2a3')).toMatchObject({ price: null, reason: 'no price' });
     expect(s.game).toMatchObject({ number: 1, id: 'g1', url: 'https://lichess.org/g1', color: 'white', opponent: { name: 'OppBot', rating: 1520 } });
-    expect(s.cell).toBe('until-settled');
-    expect(s.cellEndsAt).toBeNull();
-    expect(s.trade).toMatchObject({ endpoint: 'POST /api/predictions/trade', workspaceId: 'ws-chess', rangeMin: 0, rangeMax: 100 });
+    expect(s.cell).toBe('2026-09-13T14:30');
+    expect(s.cellEndsAt).toBe('2026-09-13T14:31:00.000Z');
+    expect(s.trade).toMatchObject({ endpoint: 'POST /api/predictions/trade', workspaceId: 'ws-chess', rangeMin: 1200, rangeMax: 2000 });
     expect(s.rules.windowSeconds).toEqual({ min: 15, max: 50, firstMove: 20 });
   });
   it('before the first poll an option says not polled yet', async () => {
@@ -615,21 +744,21 @@ describe('an old move never stays pending because its failed decline was forgott
     expect(next.of('approveOption')).toHaveLength(0);
   });
 
-  it('does not settle or accept another game until abandoned proposals close', async () => {
+  it('does not accept or seek another game until abandoned proposals close', async () => {
     const f = fakes();
     f.telarchy.declineProposal = vi.fn().mockRejectedValue(new Error('offline'));
     const op = operator(f);
     await op.onGameFull(full('white'), T0);
     await op.tick(at(18));
     await op.onGameState(st('a2a3', { status: 'mate', winner: 'black' }), at(20));
-    expect(f.of('settleMetric')).toHaveLength(0);
     await op.onChallenge(challenge(), at(100));
     expect(f.of('accept')).toHaveLength(0);
     await op.tick(at(200));
     expect(f.of('challenge')).toHaveLength(0);
     f.telarchy.declineProposal = vi.fn().mockResolvedValue(undefined);
     await op.tick(at(260));
-    expect(f.of('settleMetric')).toHaveLength(1);
+    await op.onChallenge(challenge({ id: 'c2' }), at(300));
+    expect(f.of('accept')).toEqual([{ name: 'accept', args: ['c2'] }]);
   });
 });
 

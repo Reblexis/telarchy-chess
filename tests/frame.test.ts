@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   WIDTH, HEIGHT, COLUMN, LINK_TEXT, QUESTION,
-  isDrawableState, piecesOf, squareRect, topArrows, rankedMoves, leaderRows, lastDecisionLines, callSeries, tradeRows,
+  isDrawableState, piecesOf, squareRect, topArrows, rankedMoves, leaderRows, lastDecisionLines, callSeries, callScale, tradeRows,
   clocksAt, clockText, nextCell, recordLine, renderFrame, drawnTexts, drawnItems,
 } from '../src/frame.js';
 
@@ -188,7 +188,7 @@ describe('the clocks', () => {
     expect(clocksAt(s, NOW).white).toBe(0);
   });
   it('stands still once the game has ended', () => {
-    const s = state({ phase: 'settling', open: null });
+    const s = state({ phase: 'seeking', open: null });
     s.game.status = 'mate'; s.game.result = 0; s.game.endedAt = at(3);
     expect(clocksAt(s, NOW).ticking).toBe(null);
   });
@@ -207,7 +207,7 @@ describe('the state of the move', () => {
     expect(nextCell(state({ phase: 'their-move', open: null }), NOW)).toEqual({ label: 'Their move', value: 'thinking', tone: 'mute' });
   });
   it('shows the result once the game is over', () => {
-    const over = (result: number) => { const s = state({ phase: 'settling', open: null }); s.game.result = result; s.game.status = 'mate'; return nextCell(s, NOW); };
+    const over = (result: number) => { const s = state({ phase: 'seeking', open: null }); s.game.result = result; s.game.status = 'mate'; return nextCell(s, NOW); };
     expect(over(100)).toEqual({ label: 'Game over', value: 'won', tone: 'green' });
     expect(over(0)).toEqual({ label: 'Game over', value: 'lost', tone: 'red' });
     expect(over(50)).toEqual({ label: 'Game over', value: 'drawn', tone: 'fg' });
@@ -287,8 +287,8 @@ describe('the last decision, while no move is open', () => {
     recentDecisions: [{ game: 11, move: 6, at: at(20), chosen: 'e1g1', san: 'O-O', price: 56.4, tied: 1, kind: 'market', undecidedReason: null, ...over }],
   });
   it('says what was chosen at what price, and who is thought about', () => {
-    expect(lastDecisionLines(decided())).toEqual(['Move 6: O-O, chosen at 56.4 of 100', 'Waiting for BretemaBot (2692) to reply']);
-    expect(drawnTexts(decided(), NOW)).toEqual(expect.arrayContaining(['LAST DECISION', 'Move 6: O-O, chosen at 56.4 of 100']));
+    expect(lastDecisionLines(decided())).toEqual(['Move 6: O-O, chosen at 56.4', 'Waiting for BretemaBot (2692) to reply']);
+    expect(drawnTexts(decided(), NOW)).toEqual(expect.arrayContaining(['LAST DECISION', 'Move 6: O-O, chosen at 56.4']));
   });
   it('a move not chosen by the market was chosen at random', () => {
     expect(lastDecisionLines(decided({ kind: 'undecided', price: null }))[0]).toBe('Move 6: O-O, chosen at random');
@@ -305,14 +305,32 @@ describe('the last decision, while no move is open', () => {
 });
 
 describe('the market\'s call', () => {
-  it('is the history ending at the value now, on the metric\'s own 0 to 100', () => {
-    const s = state({ call: { marketId: 'm', value: 58, history: [{ at: at(60), value: 50 }, { at: at(30), value: 55 }] } });
-    expect(callSeries(s)).toEqual({ value: 58, points: [50, 55, 58] });
-    expect(drawnTexts(s, NOW)).toEqual(expect.arrayContaining(["MARKET'S CALL", '58.0', '50']));
+  it('is the history ending at the value now, a rating read as a whole number', () => {
+    const s = state({ call: { marketId: 'm', value: 1558.4, history: [{ at: at(60), value: 1550 }, { at: at(30), value: 1555 }] } });
+    expect(callSeries(s)).toEqual({ value: 1558.4, points: [1550, 1555, 1558.4] });
+    expect(drawnTexts(s, NOW)).toEqual(expect.arrayContaining(["MARKET'S CALL", '1558']));
   });
-  it('junk points are dropped and values are held inside 0 to 100', () => {
-    const s = state({ call: { marketId: 'm', value: 140, history: [{ at: at(9), value: 'x' }, { at: at(8), value: -5 }, null] } });
-    expect(callSeries(s)).toEqual({ value: 100, points: [0, 100] });
+  it('junk points are dropped', () => {
+    const s = state({ call: { marketId: 'm', value: 1540, history: [{ at: at(9), value: 'x' }, { at: at(8), value: 1500 }, null] } });
+    expect(callSeries(s)).toEqual({ value: 1540, points: [1500, 1540] });
+  });
+  it('the scale is 80 points tall, centred on the player\'s rating rounded to ten, hairlines at the centre and 20 either side', () => {
+    const s = state({ call: { marketId: 'm', value: 1558, history: [] } });
+    s.player = { ...(s.player ?? {}), rating: 1562 };
+    expect(callScale(s)).toEqual({ min: 1520, max: 1600, lines: [1540, 1560, 1580], centre: 1560 });
+    expect(drawnTexts(s, NOW)).toEqual(expect.arrayContaining(['1540', '1560', '1580']));
+    s.player.rating = 1565;
+    expect(callScale(s).centre).toBe(1570);
+  });
+  it('without a player the scale centres on the call, and without either on 1500', () => {
+    const s = state({ call: { marketId: 'm', value: 1493, history: [] } });
+    s.player = null;
+    expect(callScale(s).centre).toBe(1490);
+    expect(callScale(state({ player: null })).centre).toBe(1500);
+  });
+  it('a point outside the scale is drawn on its edge and never throws', () => {
+    const s = state({ call: { marketId: 'm', value: 1900, history: [{ at: at(9), value: 1200 }] } });
+    expect(() => renderFrame(s, NOW)).not.toThrow();
   });
   it('no call yet reads a dash and draws no line, and never throws', () => {
     expect(callSeries(state())).toEqual({ value: null, points: [] });
@@ -321,9 +339,9 @@ describe('the market\'s call', () => {
     expect(() => renderFrame(state({ call: { value: null, history: 7 } }), NOW)).not.toThrow();
   });
   it('the line is drawn in the accent inside the column', () => {
-    const s = state({ call: { marketId: 'm', value: 50, history: Array.from({ length: 40 }, (_, i) => ({ at: at(100 - i), value: 50 })) } });
+    const s = state({ call: { marketId: 'm', value: 1420, history: Array.from({ length: 40 }, (_, i) => ({ at: at(100 - i), value: 1420 })) } });
     const buf = renderFrame(s, NOW);
-    // a flat call at 50 runs along the graph's mid line
+    // a flat call at the scale's centre (the player is 1415, so 1420) runs along the graph's mid line
     const hit = [0, 1, 2, -1, -2].some(d => near(px(buf, COLUMN.x + 200, 282 + d), hex('#f59e0b'), 40));
     expect(hit).toBe(true);
   });

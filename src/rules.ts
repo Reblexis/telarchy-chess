@@ -82,9 +82,35 @@ export function moveNumber(plies: number): number {
   return Math.floor(plies / 2) + 1;
 }
 
-/** docs/chess.md "The workspace": the game ends the book, never a clock. */
-export function horizonCell(_startedAt: Date): string {
-  return 'until-settled';
+const HALF_HOUR_MS = 30 * 60_000;
+
+/** docs/chess.md "Books on the half hour": the first half-hour mark at least
+ *  30 minutes away, as the minute cell Telarchy prices (`YYYY-MM-DDTHH:MM`, UTC). */
+export function targetMark(now: Date): string {
+  const at = Math.ceil((now.getTime() + HALF_HOUR_MS) / HALF_HOUR_MS) * HALF_HOUR_MS;
+  return new Date(at).toISOString().slice(0, 16);
+}
+
+/** A mark's first instant. */
+export function markInstant(cell: string): Date {
+  return new Date(`${cell}:00Z`);
+}
+
+/** The words the floor reads after the metric's name. */
+export function markTitle(cell: string): string {
+  return `at ${cell.slice(11)} UTC`;
+}
+
+export interface RatingRecord { at: string; rating: number }
+
+/** docs/chess.md "The rating at a mark": the last rating recorded at or before `instant`. */
+export function ratingAt(records: RatingRecord[], instant: Date): number | null {
+  let best: RatingRecord | null = null;
+  for (const r of records) {
+    const t = Date.parse(r.at);
+    if (t <= instant.getTime() && (!best || t >= Date.parse(best.at))) best = r;
+  }
+  return best ? best.rating : null;
 }
 
 /** Lichess statuses that end a game with a result. */
@@ -99,9 +125,10 @@ export function scoreOf(game: { status: string; winner?: Color | null }, us: Col
 
 export interface ChallengeLike {
   variant?: { key?: string };
+  rated?: boolean;
   timeControl?: { type?: string; limit?: number; increment?: number };
 }
-export type Verdict = { accept: true } | { accept: false; reason: 'later' | 'variant' | 'timeControl' };
+export type Verdict = { accept: true } | { accept: false; reason: 'later' | 'variant' | 'rated' | 'timeControl' };
 
 /** docs/chess.md "Clocks": which incoming challenges are taken. */
 export function challengeVerdict(ch: ChallengeLike, state: { busy: boolean }): Verdict {
@@ -111,7 +138,12 @@ export function challengeVerdict(ch: ChallengeLike, state: { busy: boolean }): V
   const ok =
     tc?.type === 'clock' &&
     typeof tc.limit === 'number' && tc.limit >= 600 && tc.limit <= 10800 &&
-    typeof tc.increment === 'number' && tc.increment >= 0 && tc.increment <= 180;
+    typeof tc.increment === 'number' && tc.increment >= 0 && tc.increment <= 180 &&
+    // Lichess counts a clock as classical from 25 minutes of base plus 40 increments.
+    tc.limit + 40 * tc.increment >= 1500;
+  if (!ok) return { accept: false, reason: 'timeControl' };
+  // docs/chess.md "Clocks": only a game that moves the classical rating is played.
+  if (ch.rated !== true) return { accept: false, reason: 'rated' };
   return ok ? { accept: true } : { accept: false, reason: 'timeControl' };
 }
 
