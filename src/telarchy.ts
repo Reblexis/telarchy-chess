@@ -202,6 +202,12 @@ export class HttpTelarchyClient implements TelarchyClient {
     return id;
   }
 
+  async bookPrice(ref: ProposalRef): Promise<number | null> {
+    const r = await this.call('GET', `/proposals/${encodeURIComponent(ref.id)}`);
+    const row = (Array.isArray(r?.markets) ? r.markets : []).find((x: any) => typeof x?.approved?.marketId === 'string');
+    return num(row?.approved?.consensus);
+  }
+
   async fundBook(marketId: string, amount: number): Promise<void> {
     await this.call('POST', `/predictions/markets/${encodeURIComponent(marketId)}/liquidity`, { amount });
   }

@@ -16,6 +16,7 @@ function fakes(o: { failPost?: number; failFund?: number; failWall?: number; fai
   const calls: Call[] = [];
   const fail = { post: o.failPost ?? 0, fund: o.failFund ?? 0, wall: o.failWall ?? 0, approve: o.failApprove ?? 0 };
   const order = { filled: 0, remaining: GATE.wall, status: 'open' };
+  const book = { price: 50 as number | null, fail: false };
   let n = 0;
   const telarchy: TelarchyClient = {
     async setHorizon(cell, proposalCredits) { calls.push({ name: 'setHorizon', args: proposalCredits === undefined ? [cell] : [cell, proposalCredits] }); },
@@ -31,7 +32,7 @@ function fakes(o: { failPost?: number; failFund?: number; failWall?: number; fai
       calls.push({ name: 'postQuestion', args: [title, decideBy.toISOString()] });
       if (fail.post > 0) { fail.post--; throw new Error('POST /proposals -> 500'); }
       n++;
-      order.filled = 0; order.remaining = GATE.wall; order.status = 'open';
+      order.filled = 0; order.remaining = GATE.wall; order.status = 'open'; book.price = 50;
       return { id: `p${n}`, number: n, url: `u/p/${n}` };
     },
     async approvedBook(ref) { calls.push({ name: 'approvedBook', args: [ref.id] }); return `m-${ref.id}`; },
@@ -43,6 +44,11 @@ function fakes(o: { failPost?: number; failFund?: number; failWall?: number; fai
       calls.push({ name: 'placeWall', args: [marketId, budget] });
       if (fail.wall > 0) { fail.wall--; throw new Error('limit-orders -> 403'); }
       return `o-${marketId}`;
+    },
+    async bookPrice(ref) {
+      calls.push({ name: 'bookPrice', args: [ref.id] });
+      if (book.fail) throw new Error('GET /proposals -> 502');
+      return book.price;
     },
     async readOrder(id) { calls.push({ name: 'readOrder', args: [id] }); return { ...order }; },
     async approveProposal(ref) {
@@ -61,8 +67,8 @@ function fakes(o: { failPost?: number; failFund?: number; failWall?: number; fai
     async account() { return { username: ME, url: 'x', rating: 1500, provisional: false, games: { played: 6, won: 0, lost: 6, drawn: 0 } }; },
   };
   const of = (name: string) => calls.filter(c => c.name === name);
-  const fill = (filled = GATE.wall) => { order.filled = filled; order.remaining = GATE.wall - filled; order.status = order.remaining === 0 ? 'filled' : 'open'; };
-  return { telarchy, lichess, calls, of, fill, names: () => calls.map(c => c.name) };
+  const fill = (filled = GATE.wall, price: number | null = filled >= GATE.wall ? 56.2 : 50) => { order.filled = filled; order.remaining = GATE.wall - filled; order.status = order.remaining === 0 ? 'filled' : 'open'; book.price = price; };
+  return { telarchy, lichess, calls, of, fill, book, names: () => calls.map(c => c.name) };
 }
 
 const opts = (over: Record<string, unknown> = {}) => ({ username: ME, seek: true, workspaceId: 'ws', launch: GATE, ...over });
@@ -232,11 +238,46 @@ describe('the launch', () => {
     expect(op.publicState(at(6)).launch).toBeNull();
     expect(op.publicState(at(6)).phase).toBe('seeking');
   });
-  it('less than one credit left counts as filled', async () => {
+  it('THE GAME STARTS ONCE THE BOOK SAYS MORE THAN 50: a hair above launches', async () => {
     const f = fakes();
     const op = operator(f);
-    await op.tick(T0); f.fill(2499.5); await op.tick(at(5));
+    await op.tick(T0); f.fill(2500, 50.01); await op.tick(at(5));
     expect(f.of('approveProposal')).toHaveLength(1);
+  });
+  it('exactly 50 launches nothing, however much of the wall is spent', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.tick(T0); f.fill(2500, 50); await op.tick(at(5)); await op.tick(at(10));
+    expect(f.of('approveProposal')).toEqual([]);
+    expect(op.publicState(at(11)).phase).toBe('launch');
+  });
+  it('a wall spent and the price sold back under 50 before the read launches nothing', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.tick(T0); f.fill(2500, 41); await op.tick(at(5));
+    expect(f.of('approveProposal')).toEqual([]);
+  });
+  it('a book opened under 50 and bought up towards it launches nothing until it is over', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.tick(T0); f.fill(0, 25); await op.tick(at(5)); f.fill(900, 50); await op.tick(at(10));
+    expect(f.of('approveProposal')).toEqual([]);
+    f.fill(2500, 53); await op.tick(at(15));
+    expect(f.of('approveProposal')).toHaveLength(1);
+  });
+  it('a price that cannot be read, or is missing, launches nothing', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.tick(T0); f.fill(2500, null); await op.tick(at(5));
+    f.book.fail = true; await op.tick(at(10));
+    expect(f.of('approveProposal')).toEqual([]);
+    expect(op.publicState(at(11)).phase).toBe('launch');
+  });
+  it('the feed still says how much of the wall is spent', async () => {
+    const f = fakes();
+    const op = operator(f);
+    await op.tick(T0); f.fill(1200); await op.tick(at(5));
+    expect(op.publicState(at(6)).launch?.filled).toBe(1200);
   });
   it('a refused approval is retried at the next read and nothing is sought meanwhile', async () => {
     const f = fakes({ failApprove: 1 });

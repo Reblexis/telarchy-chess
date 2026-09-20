@@ -335,6 +335,12 @@ describe('the launch gate\'s calls (docs/chess.md, "The launch gate")', () => {
     const { f } = fakeFetch(() => ({ body: { markets: [] } }));
     await expect(new HttpTelarchyClient(base, f).approvedBook({ id: 'q1', number: 12, url: 'u' })).rejects.toThrow(/approved book/);
   });
+  it('the book price is the approved book\'s consensus, null when it has none', async () => {
+    const a = fakeFetch(() => ({ body: { markets: [{ approved: { marketId: 'ap1', consensus: 53.4 }, declined: { marketId: 'de1', consensus: null } }] } }));
+    expect(await new HttpTelarchyClient(base, a.f).bookPrice({ id: 'q1', number: 12, url: 'u' })).toBe(53.4);
+    const b = fakeFetch(() => ({ body: { markets: [{ approved: { marketId: 'ap1', consensus: null } }] } }));
+    expect(await new HttpTelarchyClient(base, b.f).bookPrice({ id: 'q1', number: 12, url: 'u' })).toBeNull();
+  });
   it('funding is POST /predictions/markets/:id/liquidity with the amount', async () => {
     const { f, reqs } = fakeFetch(() => ({}));
     await new HttpTelarchyClient(base, f).fundBook('ap1', 1000);
