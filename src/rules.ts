@@ -160,3 +160,13 @@ export function pickOpponent(
   }
   return null;
 }
+
+/** docs/chess.md "The launch gate": the owner's money on a game never exceeds
+ *  the wall. The approved book's depth, the main book and 100 chosen move
+ *  books must fit inside it. */
+export const LAUNCH_BOOK_CREDITS = 10;
+export const LAUNCH_CHOSEN_BOOKS = 100;
+export function launchBudgetFits(wall: number, depth: number): boolean {
+  if (!Number.isFinite(wall) || !Number.isFinite(depth) || wall <= 0 || depth <= 0) return false;
+  return depth + LAUNCH_BOOK_CREDITS + LAUNCH_CHOSEN_BOOKS * LAUNCH_BOOK_CREDITS <= wall;
+}
