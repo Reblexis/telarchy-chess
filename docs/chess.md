@@ -34,8 +34,10 @@ Everything below is the contract. Internals are free within it.
 Games are **real-time**; no correspondence and no unlimited games.
 The book has no calendar deadline: the game result triggers settlement.
 
-- **Games the player starts** are **30 minutes plus 20 seconds, rated**,
-  colour random. 20 seconds is the largest increment the default
+- **Games the player starts** are **30 minutes plus 20 seconds**, colour
+  random, **rated unless the operator runs with `CHESS_RATED=off`**, which
+  makes them casual (the setting for an account Lichess does not let play
+  rated games). 20 seconds is the largest increment the default
   lichess-bot configuration accepts (`max_increment: 20`, `max_base:
   1800`), which most bots run. 30+20 is Lichess's classical speed, so the
   rating shown is the classical rating.
@@ -232,8 +234,54 @@ write 20 seconds. A Lichess move is bounded at 10 seconds with one retry; a
 move Lichess refuses is logged with its answer and the game state is
 re-read.
 
-The operator account never trades. Nothing about a move is decided by the
-operator except through this rule.
+The operator account never trades, except the one launch order below.
+Nothing about a move is decided by the operator except through this rule.
+
+## The launch gate
+
+A game is played only when somebody has paid to back it. With the gate on
+(`LAUNCH_WALL` set to a number of credits, the wall; off when unset), between
+games the floor carries one question and no game is sought or accepted until
+it is answered.
+
+- **The question.** Once the last game is settled and nothing is pending,
+  the operator posts an ordinary approve or decline proposal titled
+  `Start game G?` (G the next game's number), deadline seven days out,
+  priced on Game score like everything else: its approved book settles at
+  game G's result. Before posting it sets the metric's "Proposal opens with"
+  to 0, so **both branches spawn unfunded and the decline book refuses every
+  trade**; the decline price is never read.
+- **The wall.** The operator funds the approved book with `LAUNCH_DEPTH`
+  credits (default 1,000) and rests one limit order on it as itself: buy
+  `lower` at 50, budget the wall. Whoever wants the game buys `higher` on the
+  approved book; each buy is pushed back to 50 by the order until the order's
+  budget is spent. That `lower` position is the owner's insurance: a lost
+  game pays it, a won game costs it.
+- **The launch.** The operator reads its order every 5 seconds. When it is
+  filled (or less than one credit of it remains), the operator approves the
+  proposal, and the idle rule seeks a game at once. A refused approval is
+  retried at the next read. Whoever bought through the wall is long game G.
+- **The owner's money on a game never exceeds the wall.** `LAUNCH_DEPTH`
+  plus the main book plus 100 chosen move books must fit inside the wall, or
+  the operator refuses to start. A lost game therefore costs the owner
+  nothing: the insurance pays the wall and the books hold less than that.
+- While the question is open and the wall stands, the player challenges
+  nobody and declines an incoming challenge with `later`. `phase` is
+  `launch` and `/state` carries `launch: { proposal: { id, number, url },
+  marketId, wall, filled, postedAt }` (`filled` the credits of the order
+  spent so far); `launch` is null at any other time.
+- When a game starts the "Proposal opens with" number goes back to the move
+  books' 10. A launched game that Lichess aborts is still owed: the player
+  seeks again without a new question. A game that ends with a result uses
+  the launch up.
+- Failures: a question that cannot be posted is tried again a minute later;
+  one posted whose book cannot be funded or whose order is refused is
+  declined with refund and posted again a minute later; one that reaches a
+  minute before its deadline unanswered is declined with refund and posted
+  afresh; a game that starts while a question is open (a race with an
+  accepted challenge) declines the question with refund. The open question
+  and a paid, unplayed launch both survive a restart. While the search is
+  paused no question is posted.
 
 ## Recovery and trading instructions
 
@@ -259,7 +307,9 @@ listed is present; a value not known yet is `null`.
 `GET /state`, `schema: 1`:
 
 - `phase`: `our-move` (a proposal is open), `their-move`, `settling` (the
-  game is over and its settlement has not gone through), `paused` (idle,
+  game is over and its settlement has not gone through), `launch` (idle,
+  the next game's question is open and its wall stands; "The launch gate"
+  above, where `launch` is described), `paused` (idle,
   the platform cannot price a game; "The search pauses" above),
   `seeking` (idle, looking for a game).
 - `paused`: null, or `{ since, reason }` while the search is paused.
@@ -438,7 +488,8 @@ Configuration by environment: the Telarchy base URL, the operator's key
 also an admin session that only opens the gate (a request carrying a
 participant key acts as that participant whatever session rides with it),
 the workspace and metric ids, the Lichess token (scopes `bot:play`, `challenge:read`,
-`challenge:write`), the port, the state file, and `SEEK` (off disables
+`challenge:write`), the port, the state file, `LAUNCH_WALL` and `LAUNCH_DEPTH`
+("The launch gate"), `CHESS_RATED` ("Clocks"), and `SEEK` (off disables
 challenging bots, so the player only answers challenges).
 
 **It runs on production** (`https://telarchy.com/api`, the floor at

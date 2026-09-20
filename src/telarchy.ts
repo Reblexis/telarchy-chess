@@ -1,5 +1,6 @@
 // The Telarchy client the chess operator uses (docs/chess.md, "The workspace"
-// and "The move"). Deliberately has no trade method: the operator never trades.
+// and "The move"). Deliberately has no trade method: the operator never trades,
+// except the launch gate's one resting order (`placeWall`).
 import type { Activity, Prices, ProposalRef, RawTrade, TelarchyClient } from './operator.js';
 import type { MoveOption } from './rules.js';
 
@@ -176,15 +177,52 @@ export class HttpTelarchyClient implements TelarchyClient {
   }
 
   /** The game's cell becomes the metric's only horizon, with its book depths. */
-  async setHorizon(cell: string): Promise<void> {
+  async setHorizon(cell: string, proposalCredits: number = OPTION_BOOK_CREDITS): Promise<void> {
     await this.call('PUT', `/metrics/${encodeURIComponent(this.o.metricId)}`, {
       timePreference: {
         enabled: false,
         customHorizons: [cell],
         ...(cell === 'until-settled' ? { horizonTitles: { [cell]: 'when the game ends' } } : {}),
-        horizonCredits: { [cell]: { book: MAIN_BOOK_CREDITS, proposal: OPTION_BOOK_CREDITS } },
+        horizonCredits: { [cell]: { book: MAIN_BOOK_CREDITS, proposal: proposalCredits } },
       },
     });
+  }
+
+  // ---- docs/chess.md "The launch gate" ------------------------------------
+
+  async postQuestion(title: string, description: string, decideBy: Date): Promise<ProposalRef> {
+    const r = await this.call('POST', '/proposals', { title, description, decideBy: decideBy.toISOString() });
+    return { id: String(r.id), number: Number(r.number), url: `${this.o.workspaceUrl}/p/${r.number}` };
+  }
+
+  async approvedBook(ref: ProposalRef): Promise<string> {
+    const r = await this.call('GET', `/proposals/${encodeURIComponent(ref.id)}`);
+    const id = (Array.isArray(r?.markets) ? r.markets : []).map((x: any) => x?.approved?.marketId).find((x: unknown) => typeof x === 'string' && x);
+    if (!id) throw new Error(`proposal ${ref.id} has no approved book`);
+    return id;
+  }
+
+  async fundBook(marketId: string, amount: number): Promise<void> {
+    await this.call('POST', `/predictions/markets/${encodeURIComponent(marketId)}/liquidity`, { amount });
+  }
+
+  /** The one order the operator places: buy `lower` at 50, the middle of the score. */
+  async placeWall(marketId: string, budget: number): Promise<string> {
+    const r = await this.call('POST', '/predictions/limit-orders', { marketId, direction: 'lower', limitValue: 50, budgetCredits: budget });
+    if (typeof r?.id !== 'string' || !r.id) throw new Error('limit order placed but the answer carries no order id');
+    return r.id;
+  }
+
+  async readOrder(orderId: string): Promise<{ filled: number; remaining: number; status: string }> {
+    const r = await this.call('GET', '/predictions/limit-orders?status=all');
+    const rows: any[] = Array.isArray(r) ? r : Array.isArray(r?.orders) ? r.orders : [];
+    const o = rows.find(x => x?.id === orderId);
+    if (!o) throw new Error(`limit order ${orderId} is not among the operator's orders`);
+    return { filled: num(o.filledCredits) ?? 0, remaining: num(o.remainingCredits) ?? Infinity, status: String(o.status ?? '') };
+  }
+
+  async approveProposal(ref: ProposalRef): Promise<void> {
+    await this.call('POST', `/proposals/${encodeURIComponent(ref.id)}/approve`, {});
   }
 
   async refreshBooks(): Promise<void> {

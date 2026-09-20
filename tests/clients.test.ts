@@ -148,9 +148,10 @@ describe('the Telarchy client', () => {
     expect(JSON.parse(reqs[0].body!)).toEqual({ opensAt: 33.3 });
   });
 
-  it('the operator client has no way to trade', () => {
+  it('the operator client has no way to trade except the launch gate\'s one resting order', () => {
     const names = Object.getOwnPropertyNames(HttpTelarchyClient.prototype);
-    expect(names.some(n => /trade|order|buy|sell/i.test(n))).toBe(false);
+    expect(names.some(n => /trade|buy|sell/i.test(n))).toBe(false);
+    expect(names.filter(n => /order|wall/i.test(n)).sort()).toEqual(['placeWall', 'readOrder']);
   });
 });
 
@@ -303,5 +304,69 @@ describe('the Telarchy client reads the game\'s call and the floor\'s trades', (
   it('a failed trade log rejects, so the operator keeps what it had', async () => {
     const { f } = fakeFetch(r => (r.url.includes('/data-room/') ? { status: 502, body: 'bad gateway' } : route(r)));
     await expect(new HttpTelarchyClient(base, f).readActivity()).rejects.toThrow();
+  });
+});
+
+describe('the launch gate\'s calls (docs/chess.md, "The launch gate")', () => {
+  const base = { baseUrl: 'https://telarchy.com/api', workspaceId: 'ws1', metricId: 'm1', workspaceUrl: 'https://telarchy.com/chess', apiKey: 'k1' };
+  const body = (r: Req) => JSON.parse(r.body ?? 'null');
+
+  it('the horizon with proposal credits 0 makes the branches spawn unfunded; left out it is the move books\' 10', async () => {
+    const { f, reqs } = fakeFetch(() => ({}));
+    const c = new HttpTelarchyClient(base, f);
+    await c.setHorizon('until-settled', 0);
+    await c.setHorizon('until-settled');
+    expect(body(reqs[0]).timePreference.horizonCredits).toEqual({ 'until-settled': { book: 10, proposal: 0 } });
+    expect(body(reqs[1]).timePreference.horizonCredits).toEqual({ 'until-settled': { book: 10, proposal: 10 } });
+  });
+  it('the question is a proposal with no options', async () => {
+    const { f, reqs } = fakeFetch(() => ({ status: 201, body: { id: 'q1', number: 12 } }));
+    const ref = await new HttpTelarchyClient(base, f).postQuestion('Start game 3?', 'why', new Date('2026-09-27T10:00:00Z'));
+    expect(ref).toEqual({ id: 'q1', number: 12, url: 'https://telarchy.com/chess/p/12' });
+    expect(reqs[0].method).toBe('POST');
+    expect(reqs[0].url).toBe('https://telarchy.com/api/proposals');
+    expect(body(reqs[0])).toEqual({ title: 'Start game 3?', description: 'why', decideBy: '2026-09-27T10:00:00.000Z' });
+  });
+  it('the approved book is read from the proposal\'s row', async () => {
+    const { f } = fakeFetch(() => ({ body: { markets: [{ approved: { marketId: 'ap1' }, declined: { marketId: 'de1' } }] } }));
+    expect(await new HttpTelarchyClient(base, f).approvedBook({ id: 'q1', number: 12, url: 'u' })).toBe('ap1');
+  });
+  it('a proposal with no approved book throws instead of funding nothing', async () => {
+    const { f } = fakeFetch(() => ({ body: { markets: [] } }));
+    await expect(new HttpTelarchyClient(base, f).approvedBook({ id: 'q1', number: 12, url: 'u' })).rejects.toThrow(/approved book/);
+  });
+  it('funding is POST /predictions/markets/:id/liquidity with the amount', async () => {
+    const { f, reqs } = fakeFetch(() => ({}));
+    await new HttpTelarchyClient(base, f).fundBook('ap1', 1000);
+    expect(reqs[0].url).toBe('https://telarchy.com/api/predictions/markets/ap1/liquidity');
+    expect(body(reqs[0])).toEqual({ amount: 1000 });
+  });
+  it('THE ONE ORDER THE OPERATOR PLACES: buy lower at 50 with the wall as its budget, and it answers the order id', async () => {
+    const { f, reqs } = fakeFetch(() => ({ status: 201, body: { id: 'o1', status: 'open' } }));
+    expect(await new HttpTelarchyClient(base, f).placeWall('ap1', 2500)).toBe('o1');
+    expect(reqs[0].url).toBe('https://telarchy.com/api/predictions/limit-orders');
+    expect(body(reqs[0])).toEqual({ marketId: 'ap1', direction: 'lower', limitValue: 50, budgetCredits: 2500 });
+  });
+  it('an order answer without an id throws', async () => {
+    const { f } = fakeFetch(() => ({ status: 201, body: {} }));
+    await expect(new HttpTelarchyClient(base, f).placeWall('ap1', 2500)).rejects.toThrow(/order id/);
+  });
+  it('the order is found by id among all of the operator\'s orders, as a bare list or under orders', async () => {
+    const row = { id: 'o1', status: 'open', filledCredits: 400.5, remainingCredits: 2099.5 };
+    for (const payload of [[{ id: 'x' }, row], { orders: [row] }]) {
+      const { f, reqs } = fakeFetch(() => ({ body: payload }));
+      expect(await new HttpTelarchyClient(base, f).readOrder('o1')).toEqual({ filled: 400.5, remaining: 2099.5, status: 'open' });
+      expect(reqs[0].url).toBe('https://telarchy.com/api/predictions/limit-orders?status=all');
+    }
+  });
+  it('an order that is not in the list throws, so a missing order never reads as filled', async () => {
+    const { f } = fakeFetch(() => ({ body: [] }));
+    await expect(new HttpTelarchyClient(base, f).readOrder('o1')).rejects.toThrow(/o1/);
+  });
+  it('approving the question sends no option', async () => {
+    const { f, reqs } = fakeFetch(() => ({ body: { ok: true } }));
+    await new HttpTelarchyClient(base, f).approveProposal({ id: 'q1', number: 12, url: 'u' });
+    expect(reqs[0].url).toBe('https://telarchy.com/api/proposals/q1/approve');
+    expect(body(reqs[0])).toEqual({});
   });
 });

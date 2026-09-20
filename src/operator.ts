@@ -25,7 +25,8 @@ export interface ProposalRef { id: string; number: number; url: string }
 export type Prices = Record<string, { price: number | null; lead: number | null; marketId?: string }>;
 
 /** The Telarchy calls the operator makes. Deliberately no trade method:
- *  docs/chess.md, "The operator account never trades." */
+ *  docs/chess.md, "The operator account never trades", except the launch
+ *  gate's one resting order (`placeWall`). */
 /** docs/chess.md "The feed", `call` and `recentTrades`, as the client reads them. */
 export interface RawTrade { id: string; at: string; handle: string; side: 'buy' | 'sell'; direction: 'higher' | 'lower'; credits: number; marketId: string; price: number | null }
 export interface CallRecord { marketId: string | null; value: number | null; history: Array<{ at: string; value: number }> }
@@ -35,7 +36,15 @@ export interface TradeRecord { id: string; at: string; handle: string; side: 'bu
 export interface TelarchyClient {
   /** Public reads only, for the feed; optional, and never on the decision's path. */
   readActivity?(): Promise<Activity>;
-  setHorizon(cell: string): Promise<void>;
+  /** `proposalCredits` is what a proposal's branches open with; left out, the move books' own depth. */
+  setHorizon(cell: string, proposalCredits?: number): Promise<void>;
+  // docs/chess.md "The launch gate"; required only when the gate is on.
+  postQuestion?(title: string, description: string, decideBy: Date): Promise<ProposalRef>;
+  approvedBook?(ref: ProposalRef): Promise<string>;
+  fundBook?(marketId: string, amount: number): Promise<void>;
+  placeWall?(marketId: string, budget: number): Promise<string>;
+  readOrder?(orderId: string): Promise<{ filled: number; remaining: number; status: string }>;
+  approveProposal?(ref: ProposalRef): Promise<void>;
   refreshBooks(): Promise<void>;
   postProposal(title: string, description: string, decideBy: Date, options: MoveOption[]): Promise<ProposalRef>;
   readPrices(ref: ProposalRef, cell: string | null): Promise<Prices>;
@@ -75,6 +84,16 @@ export interface OperatorOptions {
   workspaceId: string;
   /** The Telarchy API base a bot trades on, published in /state. */
   tradeBase?: string;
+  /** docs/chess.md "Clocks": games the player starts are rated unless this is false. */
+  rated?: boolean;
+  /** docs/chess.md "The launch gate": on when set. */
+  launch?: { wall: number; depth: number };
+}
+
+/** docs/chess.md "The launch gate": the open question and its resting order. */
+export interface LaunchRecord {
+  proposal: ProposalRef; marketId: string; orderId: string;
+  wall: number; filled: number; postedAt: string; decideBy: string;
 }
 
 export type DecisionKind = 'market' | 'undecided' | 'forced' | 'clock';
@@ -136,6 +155,11 @@ const PROBE_EVERY_MS = 60_000;
 const SEEK_CLOCK = { limit: 1800, increment: 20, rated: true };
 const RECENT_DECISIONS = 20;
 const RECENT_OPPONENTS = 5;
+const LAUNCH_DEADLINE_MS = 7 * 86_400_000;
+const LAUNCH_READ_MS = 5_000;
+const LAUNCH_RETRY_MS = 60_000;
+const LAUNCH_RULE =
+  'I play the next game only when somebody backs it. Buy higher on Approve until my resting order at 50 is spent and the game starts; this book then settles at that game\'s score (100 a win, 50 a draw, 0 a loss). Decline cannot be traded and is never read.';
 
 function within<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -187,6 +211,11 @@ export class Operator {
    *  by a priced move or a probe that succeeds. */
   paused: { since: string; reason: string } | null = null;
   private probeAt = 0;
+  /** docs/chess.md "The launch gate": the open question, and whether a paid game is still owed. */
+  launch: LaunchRecord | null = null;
+  launched = false;
+  private launchReadAt = 0;
+  private nextLaunchAt = 0;
 
   constructor(
     private telarchy: TelarchyClient,
@@ -197,12 +226,14 @@ export class Operator {
 
   private get me(): string { return this.opts.username.toLowerCase(); }
   private running(): boolean { return !!this.game && !this.game.endedAt; }
+  /** The gate is on and no paid game is owed: nothing is sought or accepted. */
+  private gated(): boolean { return !!this.opts.launch && !this.launched; }
 
   // ---- challenges -------------------------------------------------------
 
   async onChallenge(ch: ChallengeLike & { id: string; challenger?: { id?: string } }, now: Date): Promise<void> {
     if (ch.challenger?.id?.toLowerCase() === this.me) return; // our own outgoing challenge, echoed
-    const busy = this.pendingDeclines.length > 0 || this.running() || !!this.settlement || !!this.paused || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
+    const busy = this.gated() || this.pendingDeclines.length > 0 || this.running() || !!this.settlement || !!this.paused || !!this.challengeOut || now.getTime() - this.acceptedAt < 30_000;
     const v = challengeVerdict(ch, { busy });
     try {
       if (v.accept) {
@@ -243,6 +274,12 @@ export class Operator {
       this.call = null; this.recentTrades = []; this.bookNames = new Map(); this.activityAt = 0;
       this.challengeOut = null;
       this.idleSince = null;
+      // docs/chess.md "The launch gate": a game that starts over an open question closes it with refund.
+      if (this.launch) {
+        const ref = this.launch.proposal;
+        this.launch = null;
+        await this.decline(ref, now);
+      }
       this.remember(opp.id ?? opp.name ?? '');
       // docs/chess.md "One book per game": a refusal is logged; the moves
       // still run on whatever book exists (the undecided path covers none).
@@ -392,6 +429,7 @@ export class Operator {
       if (t - this.accountAt >= 60_000) await this.readAccount(now);
       if (this.settlement && t >= this.settlement.nextTryAt) await this.trySettle(now);
       if (this.paused && !this.running() && t - this.probeAt >= PROBE_EVERY_MS) await this.probe(now);
+      await this.launchStep(now);
       await this.seek(now);
     } finally {
       this.busyTick = false;
@@ -519,6 +557,8 @@ export class Operator {
       this.idleSince = now.getTime();
       return;
     }
+    // docs/chess.md "The launch gate": a game with a result uses the launch up.
+    this.launched = false;
     const word = g.result === 100 ? 'win' : g.result === 50 ? 'draw' : 'loss';
     // docs/chess.md "Every game's book opens at 50": before the settlement,
     // which is when the platform opens the next book.
@@ -543,10 +583,67 @@ export class Operator {
     }
   }
 
+  // ---- the launch gate --------------------------------------------------
+
+  /** docs/chess.md "The launch gate": post the question when idle, read its
+   *  order every 5 seconds, approve when the wall is spent. */
+  private async launchStep(now: Date): Promise<void> {
+    const gate = this.opts.launch;
+    if (!gate || this.launched || this.running() || this.settlement || this.paused || this.open || this.pendingDeclines.length) return;
+    const t = now.getTime();
+    const tc = this.telarchy;
+    if (!this.launch) {
+      if (t < this.nextLaunchAt || this.challengeOut || t - this.acceptedAt < 30_000) return;
+      const number = (this.games.at(-1)?.number ?? 0) + 1;
+      const decideBy = new Date(t + LAUNCH_DEADLINE_MS);
+      let ref: ProposalRef;
+      try {
+        await tc.setHorizon(horizonCell(now), 0);
+        ref = await tc.postQuestion!(`Start game ${number}?`, LAUNCH_RULE, decideBy);
+      } catch (e) {
+        this.nextLaunchAt = t + LAUNCH_RETRY_MS;
+        console.error(`launch question: ${(e as Error).message}`);
+        return;
+      }
+      try {
+        const marketId = await tc.approvedBook!(ref);
+        await tc.fundBook!(marketId, gate.depth);
+        const orderId = await tc.placeWall!(marketId, gate.wall);
+        this.launch = { proposal: ref, marketId, orderId, wall: gate.wall, filled: 0, postedAt: now.toISOString(), decideBy: decideBy.toISOString() };
+        this.launchReadAt = t;
+      } catch (e) {
+        this.nextLaunchAt = t + LAUNCH_RETRY_MS;
+        console.error(`launch wall on ${ref.id}, question declined: ${(e as Error).message}`);
+        await this.decline(ref, now);
+      }
+      return;
+    }
+    const l = this.launch;
+    if (t >= Date.parse(l.decideBy) - 60_000) {
+      this.launch = null;
+      await this.decline(l.proposal, now);
+      return;
+    }
+    if (t - this.launchReadAt < LAUNCH_READ_MS) return;
+    this.launchReadAt = t;
+    try {
+      const o = await within(tc.readOrder!(l.orderId), POLL_TIMEOUT_MS);
+      l.filled = o.filled;
+      if (o.status !== 'filled' && o.remaining >= 1) return;
+      await tc.approveProposal!(l.proposal);
+      this.launch = null;
+      this.launched = true;
+      // sought at once: the idle wait was the wall
+      this.idleSince = t - SEEK_IDLE_MS;
+    } catch (e) {
+      console.error(`launch ${l.proposal.id}: ${(e as Error).message}`);
+    }
+  }
+
   // ---- seeking ----------------------------------------------------------
 
   private async seek(now: Date): Promise<void> {
-    if (this.pendingDeclines.length || !this.opts.seek || this.running() || this.settlement || this.paused || this.open) return;
+    if (this.gated() || this.pendingDeclines.length || !this.opts.seek || this.running() || this.settlement || this.paused || this.open) return;
     const t = now.getTime();
     if (this.idleSince === null) this.idleSince = t;
     if (this.challengeOut) {
@@ -570,7 +667,7 @@ export class Operator {
         return;
       }
       this.remember(target);
-      const { id } = await this.lichess.challenge(target, SEEK_CLOCK);
+      const { id } = await this.lichess.challenge(target, { ...SEEK_CLOCK, rated: this.opts.rated !== false });
       this.challengeOut = { id, username: target, sentAt: t };
     } catch (e) {
       this.nextSeekAt = t + CHALLENGE_WAIT_MS;
@@ -623,6 +720,7 @@ export class Operator {
       game: this.game, open: this.open, recentDecisions: this.recentDecisions, games: this.games,
       settlement: this.settlement, playedPly: this.playedPly, recentOpponents: this.recentOpponents,
       plies: this.plies, pendingDeclines: this.pendingDeclines, paused: this.paused,
+      launch: this.launch, launched: this.launched,
     };
   }
 
@@ -638,6 +736,8 @@ export class Operator {
     op.plies = raw.plies ?? {};
     op.pendingDeclines = raw.pendingDeclines ?? [];
     op.paused = raw.paused ?? null;
+    op.launch = raw.launch ?? null;
+    op.launched = raw.launched ?? false;
     return op;
   }
 
@@ -657,12 +757,17 @@ export class Operator {
   publicState(now: Date) {
     const g = this.game;
     const open = this.open;
-    const phase = open ? 'our-move' : this.running() ? 'their-move' : this.settlement ? 'settling' : this.paused ? 'paused' : 'seeking';
+    const phase = open ? 'our-move' : this.running() ? 'their-move' : this.settlement ? 'settling' : this.paused ? 'paused' : this.gated() ? 'launch' : 'seeking';
     return {
       schema: 1,
       phase,
       // docs/chess.md "The search pauses": why no game is sought, or null.
       paused: this.paused,
+      // docs/chess.md "The launch gate": the open question, or null.
+      launch: this.launch && {
+        proposal: this.launch.proposal, marketId: this.launch.marketId, wall: this.launch.wall,
+        filled: this.launch.filled, postedAt: this.launch.postedAt,
+      },
       player: this.player,
       game: g && {
         number: g.number, id: g.id, url: `https://lichess.org/${g.id}`, color: g.color, opponent: g.opponent,

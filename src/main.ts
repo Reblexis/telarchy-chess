@@ -4,6 +4,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Operator } from './operator.js';
+import { launchBudgetFits } from './rules.js';
 import { HttpTelarchyClient } from './telarchy.js';
 import { HttpLichessClient } from './lichess.js';
 import { createServer } from './server.js';
@@ -37,7 +38,17 @@ const telarchy = new HttpTelarchyClient({
     : undefined,
 });
 const lichess = new HttpLichessClient(LICHESS_TOKEN);
-const opts = { username: USERNAME, seek: SEEK, workspaceId: WS, tradeBase: BASE };
+// docs/chess.md "The launch gate": on when LAUNCH_WALL is set; the books must fit inside the wall.
+const WALL = process.env.LAUNCH_WALL ? Number(process.env.LAUNCH_WALL) : null;
+const DEPTH = Number(env('LAUNCH_DEPTH', '1000'));
+if (WALL !== null && !launchBudgetFits(WALL, DEPTH)) {
+  throw new Error(`LAUNCH_WALL ${process.env.LAUNCH_WALL} does not cover LAUNCH_DEPTH ${DEPTH} plus the main book and 100 move books: the owner's money on a game never exceeds the wall`);
+}
+const opts = {
+  username: USERNAME, seek: SEEK, workspaceId: WS, tradeBase: BASE,
+  rated: env('CHESS_RATED', 'on') !== 'off',
+  launch: WALL !== null ? { wall: WALL, depth: DEPTH } : undefined,
+};
 
 function load(): Operator {
   try {
