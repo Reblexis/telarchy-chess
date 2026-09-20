@@ -24,7 +24,7 @@ function fakes(o: { failPost?: number; failFund?: number; failWall?: number; fai
     async readPrices() { return {}; },
     async approveOption(ref, option) { calls.push({ name: 'approveOption', args: [ref.id, option] }); },
     async declineProposal(ref) { calls.push({ name: 'declineProposal', args: [ref.id] }); },
-    async setOpensAt() {},
+    async setOpensAt(value) { calls.push({ name: 'setOpensAt', args: [value] }); },
     async postReading() {},
     async settleMetric(value) { calls.push({ name: 'settleMetric', args: [value] }); },
     async postQuestion(title, description, decideBy) {
@@ -103,7 +103,8 @@ describe('the question', () => {
     const f = fakes();
     const op = operator(f);
     await op.tick(T0);
-    expect(f.calls.filter(c => ['setHorizon', 'postQuestion', 'approvedBook', 'fundBook', 'placeWall'].includes(c.name))).toEqual([
+    expect(f.calls.filter(c => ['setOpensAt', 'setHorizon', 'postQuestion', 'approvedBook', 'fundBook', 'placeWall'].includes(c.name))).toEqual([
+      { name: 'setOpensAt', args: [50] },
       { name: 'setHorizon', args: ['until-settled', 0] },
       { name: 'postQuestion', args: ['Start game 1?', at(7 * 86400).toISOString()] },
       { name: 'approvedBook', args: ['p1'] },
@@ -168,6 +169,19 @@ describe('the question', () => {
     const gated = Operator.fromJSON(f.telarchy, f.lichess, () => 0, opts() as never, JSON.parse(JSON.stringify(op.toJSON())));
     await gated.tick(at(5));
     expect(f.of('postQuestion')).toEqual([]);
+  });
+});
+
+describe('the question\'s book opens at 50, where the wall rests', () => {
+  it('a refused opening value posts no question and is tried again a minute later', async () => {
+    const f = fakes();
+    let fails = 1;
+    f.telarchy.setOpensAt = async () => { if (fails-- > 0) throw new Error('PUT /metrics -> 500'); };
+    const op = operator(f);
+    await op.tick(T0); await op.tick(at(30));
+    expect(f.of('postQuestion')).toEqual([]);
+    await op.tick(at(60));
+    expect(f.of('postQuestion')).toHaveLength(1);
   });
 });
 

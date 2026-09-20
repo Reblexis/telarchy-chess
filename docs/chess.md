@@ -248,8 +248,14 @@ it is answered.
   the operator posts an ordinary approve or decline proposal titled
   `Start game G?` (G the next game's number), deadline seven days out,
   priced on Game score like everything else: its approved book settles at
-  game G's result. Before posting it sets the metric's "Proposal opens with"
-  to 0, so **both branches spawn unfunded and the decline book refuses every
+  game G's result. The question's book opens at the main book's price like
+  any proposal's, which the game-end rule ("Every game's book opens at 50")
+  has put at 50, where the wall rests; the operator sets `opensAt` to 50
+  again before posting, for a floor with no main book yet. (A main book
+  sitting elsewhere, as after a hand settlement, must be settled once at 50
+  first: a book opened near 0 is seven times thinner for the same credits and
+  a buyer cannot get through the wall.) It then sets the metric's "Proposal
+  opens with" to 0, so **both branches spawn unfunded and the decline book refuses every
   trade**; the decline price is never read.
 - **The wall.** The operator funds the approved book with `LAUNCH_DEPTH`
   credits (default 1,000) and rests one limit order on it as itself: buy
