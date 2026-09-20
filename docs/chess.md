@@ -246,7 +246,7 @@ it is answered.
 
 - **The question.** Once the last game is settled and nothing is pending,
   the operator posts an ordinary approve or decline proposal titled
-  `Start game G?` (G the next game's number), deadline seven days out,
+  `Start game G?` (G the next game's number), deadline one hour out,
   priced on Game score like everything else: its approved book settles at
   game G's result. The question's book opens at the main book's price like
   any proposal's, which the game-end rule ("Every game's book opens at 50")
@@ -282,9 +282,10 @@ it is answered.
   the launch up.
 - Failures: a question that cannot be posted is tried again a minute later;
   one posted whose book cannot be funded or whose order is refused is
-  declined with refund and posted again a minute later; one that reaches a
-  minute before its deadline unanswered is declined with refund and posted
-  afresh; a game that starts while a question is open (a race with an
+  declined with refund and posted again a minute later; one not approved a
+  minute before its hour is up is declined with refund (whoever bought part
+  of the wall gets it back) and the same question is posted again at once
+  for another hour, as often as it takes; a game that starts while a question is open (a race with an
   accepted challenge) declines the question with refund. The open question
   and a paid, unplayed launch both survive a restart. While the search is
   paused no question is posted.

@@ -106,7 +106,7 @@ describe('the question', () => {
     expect(f.calls.filter(c => ['setOpensAt', 'setHorizon', 'postQuestion', 'approvedBook', 'fundBook', 'placeWall'].includes(c.name))).toEqual([
       { name: 'setOpensAt', args: [50] },
       { name: 'setHorizon', args: ['until-settled', 0] },
-      { name: 'postQuestion', args: ['Start game 1?', at(7 * 86400).toISOString()] },
+      { name: 'postQuestion', args: ['Start game 1?', at(3600).toISOString()] },
       { name: 'approvedBook', args: ['p1'] },
       { name: 'fundBook', args: ['m-p1', 1000] },
       { name: 'placeWall', args: ['m-p1', 2500] },
@@ -316,16 +316,30 @@ describe('failures', () => {
     await op.tick(at(61));
     expect(f.of('postQuestion')).toHaveLength(2);
   });
-  it('a question a minute from its deadline is declined with refund and posted afresh', async () => {
+  it('A QUESTION NOT APPROVED WITHIN THE HOUR is declined with refund and posted again at once, for another hour', async () => {
     const f = fakes();
     const op = operator(f);
     await op.tick(T0);
-    await op.tick(at(7 * 86400 - 61));
+    f.fill(1200);
+    await op.tick(at(3600 - 61));
     expect(f.of('declineProposal')).toEqual([]);
-    await op.tick(at(7 * 86400 - 60));
+    await op.tick(at(3600 - 60));
     expect(f.of('declineProposal')).toEqual([{ name: 'declineProposal', args: ['p1'] }]);
-    await op.tick(at(7 * 86400 + 5));
-    expect(f.of('postQuestion')).toHaveLength(2);
+    expect(f.of('approveProposal')).toEqual([]);
+    await op.tick(at(3600 - 59));
+    expect(f.of('postQuestion').map(c => c.args)).toEqual([
+      ['Start game 1?', at(3600).toISOString()],
+      ['Start game 1?', at(3600 - 59 + 3600).toISOString()],
+    ]);
+    expect(op.publicState(at(3600)).launch?.filled).toBe(0);
+  });
+  it('it is reposted hour after hour for as long as nobody approves', async () => {
+    const f = fakes();
+    const op = operator(f);
+    for (let s = 0; s <= 5 * 3600; s += 5) await op.tick(at(s));
+    expect(f.of('postQuestion').length).toBe(6);
+    expect(f.of('declineProposal').length).toBe(5);
+    expect(f.of('challenge')).toEqual([]);
   });
   it('a game that starts while the question is open declines the question with refund', async () => {
     const f = fakes();
