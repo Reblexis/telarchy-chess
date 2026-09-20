@@ -598,6 +598,8 @@ export class Operator {
       const decideBy = new Date(t + LAUNCH_DEADLINE_MS);
       let ref: ProposalRef;
       try {
+        // the book must open at 50, where the wall rests, whatever the metric last read
+        await tc.setOpensAt(OPENS_AT);
         await tc.setHorizon(horizonCell(now), 0);
         ref = await tc.postQuestion!(`Start game ${number}?`, LAUNCH_RULE, decideBy);
       } catch (e) {
