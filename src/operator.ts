@@ -44,6 +44,8 @@ export interface TelarchyClient {
   fundBook?(marketId: string, amount: number): Promise<void>;
   placeWall?(marketId: string, budget: number): Promise<string>;
   readOrder?(orderId: string): Promise<{ filled: number; remaining: number; status: string }>;
+  /** The approved book's price now, or null when it has none. */
+  bookPrice?(ref: ProposalRef): Promise<number | null>;
   approveProposal?(ref: ProposalRef): Promise<void>;
   refreshBooks(): Promise<void>;
   postProposal(title: string, description: string, decideBy: Date, options: MoveOption[]): Promise<ProposalRef>;
@@ -157,6 +159,8 @@ const RECENT_DECISIONS = 20;
 const RECENT_OPPONENTS = 5;
 const LAUNCH_DEADLINE_MS = 3_600_000;
 const LAUNCH_READ_MS = 5_000;
+/** The wall rests at 50; the game starts once the book says more. */
+const LAUNCH_ABOVE = 50;
 const LAUNCH_RETRY_MS = 60_000;
 const LAUNCH_RULE =
   'I play the next game only when somebody backs it. Buy higher on Approve until my resting order at 50 is spent and the game starts; this book then settles at that game\'s score (100 a win, 50 a draw, 0 a loss). Decline cannot be traded and is never read.';
@@ -629,9 +633,16 @@ export class Operator {
     if (t - this.launchReadAt < LAUNCH_READ_MS) return;
     this.launchReadAt = t;
     try {
-      const o = await within(tc.readOrder!(l.orderId), POLL_TIMEOUT_MS);
-      l.filled = o.filled;
-      if (o.status !== 'filled' && o.remaining >= 1) return;
+      // The order is read for the feed (how much of the wall is spent); a
+      // failed read of it never blocks the launch, which is the price alone.
+      try {
+        l.filled = (await within(tc.readOrder!(l.orderId), POLL_TIMEOUT_MS)).filled;
+      } catch (e) {
+        console.error(`launch order ${l.orderId}: ${(e as Error).message}`);
+      }
+      // docs/chess.md "The launch": the game starts once the book says more than 50.
+      const price = await within(tc.bookPrice!(l.proposal), POLL_TIMEOUT_MS);
+      if (typeof price !== 'number' || !(price > LAUNCH_ABOVE)) return;
       await tc.approveProposal!(l.proposal);
       this.launch = null;
       this.launched = true;

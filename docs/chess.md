@@ -263,10 +263,15 @@ it is answered.
   approved book; each buy is pushed back to 50 by the order until the order's
   budget is spent. That `lower` position is the owner's insurance: a lost
   game pays it, a won game costs it.
-- **The launch.** The operator reads its order every 5 seconds. When it is
-  filled (or less than one credit of it remains), the operator approves the
-  proposal, and the idle rule seeks a game at once. A refused approval is
-  retried at the next read. Whoever bought through the wall is long game G.
+- **The launch.** The game starts once the question's approved book says
+  more than 50. The operator reads that price and its own order every 5
+  seconds; when the price is above 50 it approves the proposal, and the idle
+  rule seeks a game at once. A price at rest above 50 means the wall is
+  spent, because every buy is pushed back to 50 inside its own trade while
+  any of the order is left; exactly 50, or an order spent and the price sold
+  back under 50 before the read, launches nothing. A price that cannot be
+  read launches nothing, and a refused approval is retried at the next read.
+  Whoever bought through the wall is long game G.
 - **The owner's money on a game never exceeds the wall.** `LAUNCH_DEPTH`
   plus the main book plus 100 chosen move books must fit inside the wall, or
   the operator refuses to start. A lost game therefore costs the owner
