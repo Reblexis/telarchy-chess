@@ -380,7 +380,7 @@ leaves does.
 
 The game rendered as a 1280 by 720 frame in-process (`@napi-rs/canvas`, no
 browser) and pushed to Twitch at 5 frames a second through ffmpeg, from the
-chess server. The channel is https://www.twitch.tv/telarchy, the one the
+chess host. It is off while chess is stopped ("Operation"). The channel is https://www.twitch.tv/telarchy, the one the
 snake used (credentials and the stream key in the keyring,
 `telarchy/twitch.env`). A channel takes one stream, so while chess streams
 the snake's stream unit is stopped and its watchdog does not start it again
@@ -490,10 +490,14 @@ it reopens the event stream, which replays the current game, declines any
 proposal left open with refund, and posts a fresh one if it is the
 player's turn.
 
-It runs on the snake's server (Hetzner `telarchy-snake`, 167.233.147.90)
-as the `systemd --user` unit `telarchy-chess.service`, port 8803, Caddy
-serving `chess.167-233-147-90.nip.io` (and `chess.telarchy.com` once its A
-record exists). It is a light process: no engine, a few reads a minute.
+It does not run now: the floor is unlisted, the operator and the stream are
+stopped, and their server (Hetzner `telarchy-snake`) is retired. The last
+state (`state/chess.json` and the earlier copies), `.env`, units and logs are
+in the archive `/root/archive/telarchy-snake-box-2026-11-06.tgz` in the fleet's `ops` body (agent-economy `docs/operations.md`) and the Hetzner snapshot "telarchy-snake before retiring" (image 453043097), and the workspace's `liveFeed` is cleared. Running it again
+takes a host with Node 22, the checkout with `state/` and `.env` from the
+archive, the `systemd --user` unit `telarchy-chess.service`, a public HTTPS
+name for port 8803, and the workspace's `liveFeed` set to that name. It is a
+light process: no engine, a few reads a minute.
 
 Configuration by environment: the Telarchy base URL, the operator's key
 (`chess-operator`, the only identity it acts as), on the admin-gated beta

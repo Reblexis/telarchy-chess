@@ -17,6 +17,9 @@ deadline arrives. A trade can change which move gets played.
 
 ## 1. Read the live game, no account needed
 
+Chess is stopped for now (`docs/chess.md`, "Operation"), so the feed
+below does not answer until it runs again.
+
 These shell examples use `curl` and `jq`.
 
 ```bash
